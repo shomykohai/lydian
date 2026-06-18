@@ -1,0 +1,162 @@
+mod get_album;
+mod get_album_info;
+mod get_artist;
+mod get_artist_info;
+mod get_cover_art;
+mod get_song;
+mod get_top_songs;
+mod search3;
+mod stream;
+
+use std::any::type_name;
+use std::borrow::Cow;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+use std::time::Instant;
+
+use anyhow::Result;
+use async_trait::async_trait;
+use futures::StreamExt;
+use futures::future::BoxFuture;
+use futures::stream::FuturesUnordered;
+pub use get_album::*;
+pub use get_album_info::*;
+pub use get_artist::*;
+pub use get_artist_info::*;
+pub use get_cover_art::*;
+pub use get_song::*;
+pub use get_top_songs::*;
+use log::{debug, trace};
+use moka::future::Cache;
+use reqwest::StatusCode;
+pub use search3::*;
+use serde_json::Value;
+pub use stream::*;
+use thiserror::Error as TError;
+use tower::Service;
+
+use crate::providers::MusicProvider;
+
+#[derive(TError, Debug)]
+pub enum RemoteError {
+    #[error("Remote operation failed with status code: {0}")]
+    Status(StatusCode),
+    #[error("Failed to process remote dataset")]
+    ProcessingError,
+    #[error("Remote dataset is empty")]
+    EmptyDataset,
+}
+
+#[async_trait]
+pub trait RemoteOperation: Send + Sync {
+    type Output: Send;
+
+    /// Returns the unique identifier of a remote source, in case the operation
+    /// needs to be performed on a single source.
+    ///
+    /// Example: "qobuz", "tidal"...
+    fn target(&self) -> &str;
+
+    /// Whether if the operation should or not be broadcasted to all remotes. If false, the
+    /// operation will only be sent to the remote specified by `target()`.
+    fn broadcast(&self) -> bool {
+        true
+    }
+
+    async fn execute(&self, provider: &dyn MusicProvider) -> Result<Self::Output>;
+
+    /// Processes a batch of items from a remote dataset, resolves any conflicts,
+    /// removes duplicates, and returns a single result.
+    fn process(&self, items: Vec<Self::Output>) -> Result<Self::Output, RemoteError>;
+
+    /// Whether this remote operation supports caching of its results.
+    fn cache(&self) -> bool {
+        true
+    }
+
+    /// If caching is supported, returns the cache key used to store and retrieve `Self::Output`
+    /// from the cache.
+    fn cache_key(&self) -> Option<Cow<'_, str>> {
+        None
+    }
+
+    fn deserialize(&self, _value: Value) -> Option<Self::Output> {
+        None
+    }
+
+    /// If cache is supported, returns a JSON value to be stored in cache.
+    fn serialize(&self, _output: &Self::Output) -> Option<Value> {
+        None
+    }
+}
+
+pub struct RemoteLookupService<'a> {
+    pub remotes: &'a [Arc<dyn MusicProvider>],
+    pub cache: Arc<Cache<String, Value>>,
+}
+
+impl<'a, Op> Service<Op> for RemoteLookupService<'a>
+where
+    Op: RemoteOperation + 'a,
+{
+    type Error = RemoteError;
+    type Future = BoxFuture<'a, Result<Self::Response, Self::Error>>;
+    type Response = Op::Output;
+
+    fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, op: Op) -> Self::Future {
+        let remotes = self.remotes;
+        let cache = self.cache.clone();
+
+        let op = Arc::new(op);
+        Box::pin(async move {
+            let target_source = op.target();
+
+            if op.cache()
+                && let Some(cache_key) = op.cache_key()
+                && let Some(cached_json) = cache.get(&*cache_key).await
+                && let Some(deserialized) = op.deserialize(cached_json)
+            {
+                trace!("Cache hit for operation {} with key {}", type_name::<Op>(), &*cache_key);
+                return Ok(deserialized);
+            }
+
+            let mut workers: FuturesUnordered<_> = remotes
+                .iter()
+                .filter(|r| r.id() == target_source || (target_source.is_empty() && op.broadcast()))
+                .map(|r| {
+                    let op = op.clone();
+                    async move { op.execute(r.as_ref()).await }
+                })
+                .collect();
+
+            debug!("Spawned {} remote workers for operation {}", workers.len(), type_name::<Op>());
+
+            let mut results = vec![];
+            let start_time = Instant::now();
+
+            while let Some(res) = workers.next().await {
+                if let Ok(output) = res {
+                    results.push(output);
+                }
+            }
+
+            let processed = op.process(results)?;
+            let elapsed = start_time.elapsed();
+
+            debug!("Remote operation {} completed in {:.2?}", type_name::<Op>(), elapsed);
+
+            if op.cache()
+                && let Some(cache_key) = op.cache_key()
+                && let Some(serialized_value) = op.serialize(&processed)
+            {
+                cache.insert(cache_key.to_string(), serialized_value).await;
+            }
+
+            Ok(processed)
+        })
+    }
+}
