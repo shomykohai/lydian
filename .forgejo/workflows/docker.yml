@@ -1,0 +1,33 @@
+name: Build docker image
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: catthehacker/ubuntu:act-latest
+    steps:
+      - name: Checkout
+        uses: https://github.com/actions/checkout@v7
+      - name: Login to registry
+        run: |
+          echo "${{ secrets.WORKFLOW_AUTHTOKEN }}" | docker login ${{ vars.REGISTRY_URL }} -u ${{ github.repository_owner }} --password-stdin
+      - name: Build image
+        run: |
+          IMAGE_BASE="${{ vars.REGISTRY_URL }}/${{ github.repository }}"
+          docker build \
+          -t ${IMAGE_BASE}:${{ github.sha }} \
+          -t ${IMAGE_BASE}:latest \
+          .
+
+          echo "IMAGE_NAME=${IMAGE_BASE}" >> $GITHUB_ENV
+      - name: Push image
+        run: |
+          docker push ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker push ${{ env.IMAGE_NAME }}:latest
+          echo "Docker image pushed: ${{ env.IMAGE_NAME }}:${{ github.sha }}"
