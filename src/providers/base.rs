@@ -7,10 +7,12 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::models::{
+    AlbumID3,
     AlbumInfo,
     AlbumWithSongsID3,
     ArtistInfo,
     ArtistWithAlbumsID3,
+    FuzzyMatch,
     IdType,
     ORIGIN_SEP,
     SearchResult,
@@ -80,4 +82,47 @@ pub trait MusicProvider: Send + Sync {
     async fn get_cover_art(&self, id: &str, size: Option<u32>) -> Result<reqwest::Response>;
 
     async fn stream(&self, req: &StreamMedia) -> Result<reqwest::Response>;
+
+    /* Helpers that are not mapped to subsonic, but we need it for making our life easier */
+
+    async fn get_albums_by_name<'a>(&self, name: &str) -> Vec<AlbumWithSongsID3<'a>> {
+        let search_req = SearchRequest {
+            query: Cow::Borrowed(name),
+            artist_count: Some(0),
+            artist_offset: None,
+            album_count: Some(10),
+            album_offset: None,
+            song_count: Some(0),
+            song_offset: None,
+        };
+
+        let Ok(search_result) = self.search(&search_req).await else {
+            return vec![];
+        };
+
+        let mut albums = Vec::with_capacity(10);
+
+        for album in &search_result.album {
+            if let Ok(album) = self.get_album(&album.id.to_string()).await {
+                albums.push(album);
+            }
+        }
+
+        albums
+    }
+
+    async fn get_matching_remote_album(
+        &self,
+        album: &AlbumID3<'_>,
+    ) -> Option<AlbumWithSongsID3<'_>> {
+        let albums = self.get_albums_by_name(&album.name).await;
+
+        for remote_album in albums {
+            if album.is_similar_to(&remote_album.base) {
+                return Some(remote_album);
+            }
+        }
+
+        None
+    }
 }
