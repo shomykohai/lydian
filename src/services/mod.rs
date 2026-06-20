@@ -1,8 +1,10 @@
 mod cache;
+mod library_migration;
 mod remote;
 
 use std::sync::Arc;
 
+pub use library_migration::*;
 use log::{debug, info};
 pub use remote::*;
 use reqwest::Client;
@@ -31,6 +33,8 @@ pub enum ServiceError {
     TaggingError(#[from] audiotags::Error),
     #[error("Task join error: {0}")]
     TaskJoinError(#[from] tokio::task::JoinError),
+    #[error("Database error: {0}")]
+    DatabaseError(#[from] sqlx::Error),
 }
 
 pub struct ServiceManager {

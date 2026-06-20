@@ -1,4 +1,5 @@
 mod get_album;
+mod get_album_by_name;
 mod get_album_info;
 mod get_artist;
 mod get_artist_info;
@@ -20,6 +21,7 @@ use futures::StreamExt;
 use futures::future::BoxFuture;
 use futures::stream::FuturesUnordered;
 pub use get_album::*;
+pub use get_album_by_name::*;
 pub use get_album_info::*;
 pub use get_artist::*;
 pub use get_artist_info::*;
