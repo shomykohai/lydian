@@ -11,6 +11,11 @@ use serde::{Deserialize, Serialize};
 use crate::logger;
 use crate::providers::{MusicProvider, QobuzDlClient, SubsonicProvider};
 
+pub const TEMPLATE_ARTIST: &str = "{artist}";
+pub const TEMPLATE_ALBUM: &str = "{album}";
+pub const TEMPLATE_TRACK: &str = "{track}";
+pub const TEMPLATE_TITLE: &str = "{title}";
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ServerConfig {
     /// The host address to bind the server to.
