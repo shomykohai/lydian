@@ -3,21 +3,30 @@ use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 
 use super::{AlbumID3, CowStr};
-use crate::models::{FuzzyMatch, IdType, Mergeable, SubsonicEntity, TagOrigin};
+use crate::models::{
+    FuzzyMatch,
+    Id,
+    IdType,
+    Mergeable,
+    OptCowStr,
+    OptId,
+    SubsonicEntity,
+    TagOrigin,
+};
 use crate::utils;
 
 #[skip_serializing_none]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ArtistID3<'a> {
-    pub id: CowStr<'a>,
+    pub id: Id<'a>,
     pub name: CowStr<'a>,
-    pub cover_art: Option<CowStr<'a>>,
-    pub artist_image_url: Option<CowStr<'a>>,
+    pub cover_art: OptId<'a>,
+    pub artist_image_url: OptCowStr<'a>,
     pub album_count: Option<u32>,
     pub starred: Option<DateTime<Utc>>,
-    pub music_brainz_id: Option<CowStr<'a>>,
-    pub sort_name: Option<CowStr<'a>>,
+    pub music_brainz_id: OptCowStr<'a>,
+    pub sort_name: OptCowStr<'a>,
     pub roles: Option<Vec<CowStr<'a>>>,
 }
 
@@ -110,12 +119,12 @@ impl<'a> TagOrigin for ArtistWithAlbumsID3<'a> {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ArtistInfo<'a> {
-    pub biography: Option<CowStr<'a>>,
-    pub music_brainz_id: Option<CowStr<'a>>,
-    pub last_fm_url: Option<CowStr<'a>>,
-    pub small_image_url: Option<CowStr<'a>>,
-    pub medium_image_url: Option<CowStr<'a>>,
-    pub large_image_url: Option<CowStr<'a>>,
+    pub biography: OptCowStr<'a>,
+    pub music_brainz_id: OptCowStr<'a>,
+    pub last_fm_url: OptCowStr<'a>,
+    pub small_image_url: OptCowStr<'a>,
+    pub medium_image_url: OptCowStr<'a>,
+    pub large_image_url: OptCowStr<'a>,
     pub similar_artist: Option<Vec<ArtistID3<'a>>>,
 }
 

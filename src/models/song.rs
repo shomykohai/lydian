@@ -5,13 +5,15 @@ use crate::models::{
     ArtistID3,
     CowStr,
     FuzzyMatch,
+    Id,
     IdType,
     ItemGenre,
     Mergeable,
+    OptId,
     SubsonicEntity,
     TagOrigin,
 };
-use crate::utils;
+use crate::utils::metadata::{compare_artists, compare_titles};
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -25,8 +27,8 @@ pub struct Contributor<'a> {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Song<'a> {
-    pub id: CowStr<'a>,
-    pub parent: Option<CowStr<'a>>,
+    pub id: Id<'a>,
+    pub parent: OptId<'a>,
     pub is_dir: bool,
     pub title: CowStr<'a>,
     pub album: Option<CowStr<'a>>,
@@ -34,7 +36,7 @@ pub struct Song<'a> {
     pub track: Option<u32>,
     pub year: Option<u32>,
     pub genre: Option<CowStr<'a>>,
-    pub cover_art: Option<CowStr<'a>>,
+    pub cover_art: OptId<'a>,
     pub size: Option<u64>,
     pub content_type: Option<CowStr<'a>>,
     pub suffix: Option<CowStr<'a>>,
@@ -53,8 +55,8 @@ pub struct Song<'a> {
     pub disc_number: Option<u32>,
     pub created: Option<CowStr<'a>>,
     pub starred: Option<CowStr<'a>>,
-    pub album_id: Option<CowStr<'a>>,
-    pub artist_id: Option<CowStr<'a>>,
+    pub album_id: OptId<'a>,
+    pub artist_id: OptId<'a>,
     #[serde(rename = "type")]
     pub ty: Option<CowStr<'a>>,
     pub media_type: Option<CowStr<'a>>,
@@ -122,9 +124,21 @@ impl Mergeable for Song<'_> {
 
 impl FuzzyMatch for Song<'_> {
     fn is_similar_to(&self, other: &Self) -> bool {
-        utils::string::is_similar(&self.title, &other.title)
-            && utils::string::is_opt_similar(self.artist.as_deref(), other.artist.as_deref())
-            && utils::string::is_opt_similar(self.album.as_deref(), other.album.as_deref())
+        if let (Some(d1), Some(d2)) = (self.disc_number, other.disc_number)
+            && d1 != d2
+        {
+            return false;
+        }
+
+        if let (Some(album1), Some(album2)) = (self.album.as_deref(), other.album.as_deref())
+            && !compare_titles(album1, album2)
+        {
+            return false;
+        }
+
+        compare_titles(self.title.as_ref(), other.title.as_ref())
+            && compare_artists(self.artist.as_deref(), other.artist.as_deref())
+            && self.track == other.track
     }
 }
 

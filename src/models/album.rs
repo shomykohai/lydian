@@ -7,14 +7,17 @@ use crate::models::{
     ArtistID3,
     CowStr,
     FuzzyMatch,
+    Id,
     IdType,
     ItemDate,
     ItemGenre,
     Mergeable,
+    OptCowStr,
+    OptId,
     SubsonicEntity,
     TagOrigin,
 };
-use crate::utils;
+use crate::utils::metadata::{compare_artists, compare_titles};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct RecordLabel<'a> {
@@ -26,19 +29,19 @@ pub struct RecordLabel<'a> {
 pub struct DiscTitle<'a> {
     pub disc: u32,
     pub title: CowStr<'a>,
-    pub cover_art: Option<CowStr<'a>>,
+    pub cover_art: OptId<'a>,
 }
 
 #[skip_serializing_none]
 #[derive(Debug, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AlbumID3<'a> {
-    pub id: CowStr<'a>,
+    pub id: Id<'a>,
     pub name: CowStr<'a>,
-    pub version: Option<CowStr<'a>>,
-    pub artist: Option<CowStr<'a>>,
-    pub artist_id: Option<CowStr<'a>>,
-    pub cover_art: Option<CowStr<'a>>,
+    pub version: OptCowStr<'a>,
+    pub artist: OptCowStr<'a>,
+    pub artist_id: OptId<'a>,
+    pub cover_art: OptId<'a>,
     pub song_count: u32,
     pub duration: u32,
     pub play_count: Option<u64>,
@@ -46,30 +49,32 @@ pub struct AlbumID3<'a> {
     //#[serde(skip_serializing_if = "Option::is_none")]
     pub starred: Option<DateTime<Utc>>,
     pub year: Option<u32>,
-    pub genre: Option<CowStr<'a>>,
+    pub genre: OptCowStr<'a>,
     pub played: Option<DateTime<Utc>>,
     pub user_rating: Option<u8>,
     pub record_labels: Option<Vec<RecordLabel<'a>>>,
-    pub music_brainz_id: Option<CowStr<'a>>,
+    pub music_brainz_id: OptCowStr<'a>,
     pub genres: Option<Vec<ItemGenre<'a>>>,
     pub artists: Option<Vec<ArtistID3<'a>>>,
-    pub display_artist: Option<CowStr<'a>>,
+    pub display_artist: OptCowStr<'a>,
     pub release_types: Option<Vec<CowStr<'a>>>,
     pub moods: Option<Vec<CowStr<'a>>>,
-    pub sort_name: Option<CowStr<'a>>,
+    pub sort_name: OptCowStr<'a>,
     pub original_release_date: Option<ItemDate>,
     pub release_date: Option<ItemDate>,
     pub is_compilation: Option<bool>,
-    pub explicit_status: Option<CowStr<'a>>,
+    pub explicit_status: OptCowStr<'a>,
     pub disc_titles: Option<Vec<DiscTitle<'a>>>,
 }
 
 impl FuzzyMatch for AlbumID3<'_> {
     fn is_similar_to(&self, other: &Self) -> bool {
-        utils::string::is_similar(&self.name, &other.name)
-            && utils::string::is_opt_similar(self.artist.as_deref(), other.artist.as_deref())
-            && self.song_count == other.song_count
-            && self.duration.abs_diff(other.duration) <= 5
+        compare_titles(self.name.as_ref(), other.name.as_ref())
+            && compare_artists(self.artist.as_deref(), other.artist.as_deref())
+            && self.year == other.year
+            && (!(self.id.is_external() && other.id.is_external())
+                || (self.song_count == other.song_count)
+                    && self.duration.abs_diff(other.duration) <= 5)
     }
 }
 
@@ -110,6 +115,34 @@ impl Mergeable for AlbumID3<'_> {
         if self.display_artist.is_none() {
             self.display_artist = other.display_artist;
         }
+
+        if self.duration < other.duration {
+            self.duration = other.duration;
+        }
+
+        if self.explicit_status.is_none() {
+            self.explicit_status = other.explicit_status;
+        }
+
+        if self.disc_titles.is_none() {
+            self.disc_titles = other.disc_titles;
+        }
+
+        if self.sort_name.is_none() {
+            self.sort_name = other.sort_name;
+        }
+
+        if self.original_release_date.is_none() {
+            self.original_release_date = other.original_release_date;
+        }
+
+        if self.release_date.is_none() {
+            self.release_date = other.release_date;
+        }
+
+        if self.is_compilation.is_none() {
+            self.is_compilation = other.is_compilation;
+        }
     }
 }
 
@@ -133,6 +166,9 @@ impl Mergeable for AlbumWithSongsID3<'_> {
     fn merge(&mut self, other: Self) {
         self.base.merge(other.base);
         self.song.merge(other.song);
+
+        self.song
+            .sort_by(|a, b| a.disc_number.cmp(&b.disc_number).then_with(|| a.track.cmp(&b.track)));
     }
 }
 
@@ -167,12 +203,12 @@ impl<'a> TagOrigin for AlbumWithSongsID3<'a> {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AlbumInfo<'a> {
-    pub notes: Option<CowStr<'a>>,
-    pub music_brainz_id: Option<CowStr<'a>>,
-    pub last_fm_url: Option<CowStr<'a>>,
-    pub small_image_url: Option<CowStr<'a>>,
-    pub medium_image_url: Option<CowStr<'a>>,
-    pub large_image_url: Option<CowStr<'a>>,
+    pub notes: OptCowStr<'a>,
+    pub music_brainz_id: OptCowStr<'a>,
+    pub last_fm_url: OptCowStr<'a>,
+    pub small_image_url: OptCowStr<'a>,
+    pub medium_image_url: OptCowStr<'a>,
+    pub large_image_url: OptCowStr<'a>,
 }
 
 impl SubsonicEntity for AlbumInfo<'_> {
