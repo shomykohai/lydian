@@ -4,6 +4,7 @@ mod cover_art;
 pub mod proxy;
 mod search;
 mod song;
+mod star;
 mod stream;
 
 use std::sync::Arc;
@@ -88,6 +89,8 @@ impl AppRouter {
             /* Misc */
             .route("/rest/getCoverArt", get(cover_art::get_cover_art))
             .route("/rest/getCoverArt.view", get(cover_art::get_cover_art))
+            .route("/rest/star", get(star::star))
+            .route("/rest/star.view", get(star::star))
             .fallback(move |format: SubsonicRespFormat, req| {
                 proxy::subsonic_proxy(format, fallback_client, req)
             })

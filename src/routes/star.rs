@@ -1,0 +1,184 @@
+use std::borrow::Cow;
+use std::sync::Arc;
+
+use axum::Extension;
+use axum::extract::{Request, State};
+use axum::response::Response;
+use log::{debug, error};
+use reqwest::StatusCode;
+use tokio::sync::watch;
+use tower::Service;
+
+use crate::models::{AlbumWithSongsID3, Id, IdType, SubsonicErrorCode, SubsonicRespFormat};
+use crate::providers::StreamRequest;
+use crate::routes::{LydianState, SubsonicExt};
+use crate::services::{MigrationRequest, MigrationService, StreamMedia};
+use crate::storage::keys::StorageKey;
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StarPamams<'a> {
+    pub id: Option<&'a str>,
+    pub album_id: Option<&'a str>,
+}
+
+pub async fn star(
+    State(state): LydianState,
+    Extension(subsonic): SubsonicExt<'_>,
+    format: SubsonicRespFormat,
+    req: Request,
+) -> Response {
+    debug!("Star request: {}", req.uri().path());
+
+    let (parts, body) = req.into_parts();
+
+    let Ok(params) = subsonic.parse_query::<StarPamams>(&parts) else {
+        return subsonic.build_error(format, SubsonicErrorCode::RequiredParameterMissing);
+    };
+
+    let (tagged_id, target_type) = if let Some(album_id) = params.album_id {
+        (album_id, IdType::Album)
+    } else if let Some(id) = params.id {
+        (id, IdType::Song)
+    } else {
+        /* Not an ID we can handle, yeet back to subsonic */
+        if let Some(res) = subsonic.try_req::<()>(format, &parts, body).await {
+            return res;
+        }
+        return subsonic.build_response(format, StatusCode::OK, Some(()));
+    };
+
+    let parsed_id = Id::parse(Cow::Borrowed(tagged_id));
+
+    let mut active_provider = None;
+    let mut target_fetch_id = Cow::Borrowed(tagged_id);
+
+    match &parsed_id {
+        Id::External { .. } => {
+            active_provider = state.remotes.iter().find(|p| p.is_own_id(tagged_id));
+        }
+        Id::Local { .. } => {
+            if target_type == IdType::Album
+                && let Ok(local_album) = subsonic
+                    .request::<AlbumWithSongsID3<'_>>(
+                        parts.method.clone(),
+                        parts.uri.path(),
+                        parts.uri.query(),
+                        parts.headers.clone(),
+                        None,
+                    )
+                    .await
+                && let Some(album) = local_album.answer
+            {
+                for provider in &state.remotes {
+                    if let Some(remote_album) =
+                        provider.get_matching_remote_album(&album.base).await
+                    {
+                        active_provider = Some(provider);
+                        target_fetch_id = Cow::Owned(remote_album.base.id.to_string());
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    let Some(provider) = active_provider else {
+        if let Some(res) = subsonic.try_req::<()>(format, &parts, body).await {
+            return res;
+        }
+        return subsonic.build_response(format, StatusCode::OK, Some(()));
+    };
+
+    let raw_id = provider.get_raw_id(&target_fetch_id);
+
+    let mut songs_to_migrate = Vec::new();
+    let mut completion_receivers = Vec::new();
+
+    match target_type {
+        IdType::Song => {
+            if let Ok(song) = provider.get_song(&target_fetch_id).await {
+                songs_to_migrate.push((target_fetch_id.to_string(), song));
+            }
+        }
+        IdType::Album => {
+            if let Ok(album) = provider.get_album(raw_id).await {
+                for song in album.song {
+                    songs_to_migrate.push((song.id.to_string(), song));
+                }
+            }
+        }
+        _ => {}
+    }
+
+    for (media_id, _) in &songs_to_migrate {
+        let storage_key = StorageKey::Media { id: media_id.clone() };
+        let file_name = storage_key.to_file_name();
+
+        if !state.storage.disk.exists_by_prefix(&file_name).await {
+            let media_stream = StreamMedia {
+                request: StreamRequest { id: media_id.clone(), ..Default::default() },
+                range_header: Some("bytes=0-9".into()),
+            };
+
+            if let Ok(resp) = provider.stream(&media_stream).await {
+                let (tx, rx) = watch::channel(false);
+                state.services.queue_download_with_completion(
+                    file_name.clone(),
+                    resp.url(),
+                    Arc::new(tx),
+                );
+                completion_receivers.push(rx);
+            }
+        }
+    }
+
+    if !songs_to_migrate.is_empty() {
+        for mut rx in completion_receivers {
+            while !*rx.borrow() {
+                if rx.changed().await.is_err() {
+                    break;
+                }
+            }
+        }
+
+        /* Time to migrate!! */
+        let mut migration_service = MigrationService { state: Arc::clone(&state) };
+        for (media_id, song) in songs_to_migrate {
+            let file_name = StorageKey::Media { id: media_id }.to_file_name();
+            let migration_req = MigrationRequest { old_path: &file_name, metadata: &song };
+            if let Err(e) = migration_service.call(migration_req).await {
+                error!("Migration failed for song {}: {}", file_name, e);
+            }
+        }
+
+        if target_type == IdType::Album {
+            let (external_id, service) = match &parsed_id {
+                Id::External { key, origin, .. } => (key.as_ref(), origin.as_ref()),
+                Id::Local { key } => (key.as_ref(), "local"),
+            };
+
+            if let Err(e) = sqlx::query(
+                r#"
+                INSERT INTO migrations (external_id, id_type, output_file_path, service)
+                VALUES (?, 'album', NULL, ?)
+                ON CONFLICT(external_id, id_type, service) DO NOTHING
+                "#,
+            )
+            .bind(external_id)
+            .bind(service)
+            .execute(&state.storage.db)
+            .await
+            {
+                error!("Failed to register album migration: {}", e);
+            }
+        }
+
+        subsonic.scan(format).await;
+    }
+
+    if let Some(final_response) = subsonic.try_req::<()>(format, &parts, body).await {
+        return final_response;
+    }
+    subsonic.build_response(format, StatusCode::OK, Some(()))
+}
