@@ -4,10 +4,6 @@ use quick_xml::Writer;
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
 use serde_json::Value;
 
-pub fn get_content_type(resp: &reqwest::Response) -> &str {
-    resp.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("")
-}
-
 pub fn json_to_xml(
     writer: &mut Writer<Cursor<Vec<u8>>>,
     key: &str,

@@ -11,6 +11,7 @@ const MIME_TABLE: &[(&str, &str)] = &[
     ("gif", "image/gif"),
 ];
 
+#[allow(dead_code)]
 pub fn ext_to_mime(ext: &str) -> &'static str {
     MIME_TABLE
         .iter()
@@ -19,6 +20,7 @@ pub fn ext_to_mime(ext: &str) -> &'static str {
         .unwrap_or("application/octet-stream")
 }
 
+#[allow(dead_code)]
 pub fn mime_to_ext(mime: &str) -> &'static str {
     MIME_TABLE.iter().find(|(_, m)| *m == mime).map(|(ext, _)| *ext).unwrap_or_else(|| "jpg")
 }
