@@ -146,6 +146,11 @@ impl MusicProvider for SubsonicProvider {
 
         if let Some(mut album) = res.answer {
             album.tag_origin(self.id(), IdType::Album);
+            album.song.iter_mut().for_each(|song| {
+                song.suffix = Some(
+                    format!("{} ({})", song.suffix.clone().unwrap_or_default(), self.id()).into(),
+                );
+            });
             Ok(album)
         } else {
             bail!("Failed to fetch album from federated server: {:?}", res.error)
@@ -186,6 +191,11 @@ impl MusicProvider for SubsonicProvider {
 
         if let Some(mut top_songs) = res.answer {
             top_songs.tag_origin(self.id(), IdType::Song);
+            top_songs.song.iter_mut().for_each(|song| {
+                song.suffix = Some(
+                    format!("{} ({})", song.suffix.clone().unwrap_or_default(), self.id()).into(),
+                );
+            });
             Ok(top_songs)
         } else {
             bail!("Failed to fetch top songs from federated server: {:?}", res.error)

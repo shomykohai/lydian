@@ -202,9 +202,9 @@ impl<'a> TryFrom<QobuzArtist> for ArtistID3<'a> {
         let artist_cover_id = encode_cover_id(&art.image, "ar");
 
         Ok(ArtistID3 {
-            id: Cow::Owned(art.id.to_string()),
+            id: art.id.to_string().into(),
             name: Cow::Owned(name),
-            cover_art: artist_cover_id.clone(),
+            cover_art: artist_cover_id.clone().map(Into::into),
             artist_image_url: artist_cover_id,
             album_count: art.albums_count,
             starred: None,
@@ -244,7 +244,7 @@ impl<'a> TryFrom<QobuzAlbum> for AlbumID3<'a> {
         let artist_list = alb.artist.and_then(|a| {
             a.name.map(|name| {
                 vec![ArtistID3 {
-                    id: Cow::Owned(a.id.to_string()),
+                    id: a.id.into(),
                     name: Cow::Owned(name),
                     cover_art: None,
                     artist_image_url: None,
@@ -266,12 +266,12 @@ impl<'a> TryFrom<QobuzAlbum> for AlbumID3<'a> {
         let explicit = if alb.parental_warning { Some(Cow::Borrowed("explicit")) } else { None };
 
         Ok(AlbumID3 {
-            id: Cow::Owned(alb.id.unwrap_or_default()),
+            id: alb.id.unwrap_or_default().into(),
             name: Cow::Owned(alb.title.unwrap_or_default()),
             version: None,
             artist: display_name.clone(),
             artist_id: artist_list.as_ref().and_then(|list| list.first()).map(|art| art.id.clone()),
-            cover_art: cover_art_id,
+            cover_art: cover_art_id.map(Into::into),
             song_count: alb.tracks_count.unwrap_or(0),
             duration: alb.duration.unwrap_or(0),
             play_count: None,
@@ -327,7 +327,7 @@ impl<'a> TryFrom<QobuzTrack> for Song<'a> {
         let performer_list = trk.performer.and_then(|p| {
             p.name.map(|name| {
                 vec![ArtistID3 {
-                    id: Cow::Owned(p.id.to_string()),
+                    id: p.id.to_string().into(),
                     name: Cow::Owned(name),
                     cover_art: None,
                     artist_image_url: None,
@@ -362,7 +362,7 @@ impl<'a> TryFrom<QobuzTrack> for Song<'a> {
         let sampling_rate = trk.maximum_sampling_rate.map(|r| r * 1000.0).map(|r| r as u32);
 
         Ok(Song {
-            id: Cow::Owned(trk.id.unwrap_or_default().to_string()),
+            id: trk.id.unwrap_or_default().into(),
             parent: None,
             is_dir: false,
             title: Cow::Owned(trk.title.unwrap_or_default()),
@@ -373,10 +373,10 @@ impl<'a> TryFrom<QobuzTrack> for Song<'a> {
                 parse_qobuz_date(&a.release_date_original).and_then(|d| d.year.map(|y| y as u32))
             }),
             genre: genre_name,
-            cover_art: cover_art_id,
+            cover_art: cover_art_id.map(Into::into),
             size: None,
             content_type: None,
-            suffix: Some(Cow::Borrowed("Remote (Qobuz)")),
+            suffix: None,
             transcoded_content_type: None,
             transcoded_suffix: None,
             duration: trk.duration.map(|d| d as u32),
@@ -392,7 +392,12 @@ impl<'a> TryFrom<QobuzTrack> for Song<'a> {
             disc_number: trk.media_number.map(|m| m as u32),
             created: None,
             starred: None,
-            album_id: trk.album.as_ref().and_then(|a| a.id.clone()).map(Cow::Owned),
+            album_id: trk
+                .album
+                .as_ref()
+                .and_then(|a| a.id.clone())
+                .map(Cow::Owned)
+                .map(Into::into),
             artist_id: performer_list
                 .as_ref()
                 .and_then(|list| list.first())
@@ -519,6 +524,9 @@ impl MusicProvider for QobuzDlClient {
             AlbumWithSongsID3::try_from(data).map_err(|_| RemoteError::ProcessingError)?;
 
         album.tag_origin(self.id(), IdType::Album);
+        album.song.iter_mut().for_each(|song| {
+            song.suffix = Some(format!("Remote ({})", self.id()).into());
+        });
         Ok(album)
     }
 
@@ -544,6 +552,7 @@ impl MusicProvider for QobuzDlClient {
             .ok_or(RemoteError::EmptyDataset)?;
 
         song.tag_origin(self.id(), IdType::Song);
+        song.suffix = Some(format!("Remote ({})", self.id()).into());
         Ok(song)
     }
 
