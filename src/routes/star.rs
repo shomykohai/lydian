@@ -36,7 +36,7 @@ pub async fn star(
         return subsonic.build_error(format, SubsonicErrorCode::RequiredParameterMissing);
     };
 
-    let (tagged_id, target_type) = if let Some(album_id) = params.album_id {
+    let (tagged_id, mut target_type) = if let Some(album_id) = params.album_id {
         (album_id, IdType::Album)
     } else if let Some(id) = params.id {
         (id, IdType::Song)
@@ -53,23 +53,54 @@ pub async fn star(
     let mut active_provider = None;
     let mut target_fetch_id = Cow::Borrowed(tagged_id);
 
+    let is_migrated: bool = sqlx::query_scalar(
+        r#"
+        SELECT EXISTS(
+            SELECT 1 FROM migrations
+            WHERE (external_id = ? OR internal_id = ?)
+        )
+        "#,
+    )
+    .bind(tagged_id)
+    .bind(tagged_id)
+    .fetch_one(&state.storage.db)
+    .await
+    .unwrap_or(false);
+
+    if is_migrated {
+        if let Some(res) = subsonic.try_req::<()>(format, &parts, body).await {
+            return res;
+        }
+        return subsonic.build_response(format, StatusCode::OK, Some(()));
+    }
+
     match &parsed_id {
         Id::External { .. } => {
             active_provider = state.remotes.iter().find(|p| p.is_own_id(tagged_id));
         }
         Id::Local { .. } => {
-            if target_type == IdType::Album
-                && let Ok(local_album) = subsonic
-                    .request::<AlbumWithSongsID3<'_>>(
-                        parts.method.clone(),
-                        parts.uri.path(),
-                        parts.uri.query(),
-                        parts.headers.clone(),
-                        None,
-                    )
-                    .await
+            let path = parts.uri.path().replace("star", "getAlbum");
+
+            let query = if params.album_id.is_some() {
+                format!("{}&id={}", parts.uri.query().unwrap_or(""), tagged_id)
+            } else {
+                parts.uri.query().unwrap_or("").to_string()
+            };
+
+            if let Ok(local_album) = subsonic
+                .request::<AlbumWithSongsID3<'_>>(
+                    parts.method.clone(),
+                    &path,
+                    Some(&query),
+                    parts.headers.clone(),
+                    None,
+                )
+                .await
                 && let Some(album) = local_album.answer
+                && !album.base.id.is_empty()
             {
+                target_type = IdType::Album;
+
                 for provider in &state.remotes {
                     if let Some(remote_album) =
                         provider.get_matching_remote_album(&album.base).await
@@ -146,6 +177,15 @@ pub async fn star(
         let mut migration_service = MigrationService { state: Arc::clone(&state) };
         for (media_id, song) in songs_to_migrate {
             let file_name = StorageKey::Media { id: media_id }.to_file_name();
+
+            if !state.storage.disk.exists_by_prefix(&file_name).await {
+                debug!(
+                    "File {} still doesn't exist after waiting for download, skipping migration",
+                    file_name
+                );
+                continue;
+            }
+
             let migration_req = MigrationRequest { old_path: &file_name, metadata: &song };
             if let Err(e) = migration_service.call(migration_req).await {
                 error!("Migration failed for song {}: {}", file_name, e);
