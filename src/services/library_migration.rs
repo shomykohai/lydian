@@ -1,9 +1,11 @@
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use audiotags::{Album as AudioTagAlbum, Tag};
+use audiotags::{Album as AudioTagAlbum, MimeType as AudioMimeType, Picture, Tag};
 use futures::future::BoxFuture;
 use log::{debug, error};
+use mime_type::{MimeFormat, MimeType};
+use tokio::io::AsyncReadExt;
 use tokio::task;
 use tower::Service;
 
@@ -23,6 +25,7 @@ macro_rules! update_if_none {
 
 struct SongMetadata {
     title: Option<String>,
+    cover_art: Option<String>,
     artist: Option<String>,
     album: Option<String>,
     album_artist: Option<String>,
@@ -91,10 +94,9 @@ impl<'a> Service<MigrationRequest<'a>> for MigrationService {
                 }
             };
 
-            // TODO: Add cover art
-
             let metadata = SongMetadata {
                 title: Some((*song.title).to_string()),
+                cover_art: song.cover_art.as_ref().map(|s| s.to_string()),
                 artist: song.artist.as_deref().map(String::from),
                 album: song.album.as_deref().map(String::from),
                 album_artist: song.display_album_artist.as_deref().map(String::from),
@@ -103,6 +105,27 @@ impl<'a> Service<MigrationRequest<'a>> for MigrationService {
                 year: song.year.map(|y| y as i32),
                 track: song.track.map(|t| t as u16),
                 disc_number: song.disc_number.map(|d| d as u16),
+            };
+
+            let (cover_art_data, mime_type) = match &metadata.cover_art {
+                Some(cover_art) => {
+                    let disk = &state.storage.disk;
+
+                    if let (Ok(mut file), Some(ext)) = (
+                        disk.get_file_by_prefix(cover_art).await,
+                        disk.get_extension_by_prefix(cover_art).await,
+                    ) {
+                        let mut buf = Vec::new();
+
+                        let data = file.read_to_end(&mut buf).await.ok().map(|_| buf);
+                        let mime_str = MimeType::from_ext(&ext).map(|m| m.to_string());
+
+                        (data, mime_str)
+                    } else {
+                        (None, None)
+                    }
+                }
+                None => (None, None),
             };
 
             let final_path_str = final_path.clone().to_string_lossy().to_string();
@@ -153,6 +176,14 @@ impl<'a> Service<MigrationRequest<'a>> for MigrationService {
                     update_if_none!(tag, disc_number, set_disc_number, disc, tag_modified);
                 }
 
+                let audio_mime = mime_type.and_then(|m| AudioMimeType::try_from(m.as_str()).ok());
+                if let (Some(data), Some(mime)) = (&cover_art_data, audio_mime)
+                    && tag.album_cover().is_none()
+                {
+                    let picture = Picture::new(data, mime);
+                    tag.set_album_cover(picture);
+                }
+
                 if tag_modified {
                     tag.write_to_path(&final_path.into_os_string().to_string_lossy())
                         .map_err(TaggingError)?;
@@ -165,8 +196,8 @@ impl<'a> Service<MigrationRequest<'a>> for MigrationService {
             sqlx::query(
                 r#"
                 INSERT INTO migrations (external_id, id_type, output_file_path, service)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(external_id) DO NOTHING
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(external_id, id_type, service) DO NOTHING
                 "#,
             )
             .bind(song.id.to_string())
