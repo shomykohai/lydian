@@ -104,7 +104,11 @@ pub async fn get_album<'a>(
 
     let search_query: String;
     if !unified_result.base.id.is_empty() {
-        search_query = unified_result.base.name.to_string();
+        search_query = format!(
+            "{} {}",
+            unified_result.base.name,
+            unified_result.base.artist.as_deref().unwrap_or("")
+        );
         let album_op = GetAlbumByName { name: &search_query };
         let albums = service.call(album_op).await.ok();
 
@@ -122,7 +126,7 @@ pub async fn get_album<'a>(
                             r#"
                             INSERT INTO migrations (external_id, internal_id, id_type, output_file_path, service)
                             VALUES (?, ?, 'album', NULL, 'local')
-                            ON CONFLICT(external_id, id_type) DO UPDATE SET internal_id = excluded.internal_id
+                            ON CONFLICT(external_id, id_type, service) DO UPDATE SET internal_id = excluded.internal_id
                             "#,
                         )
                         .bind(album.base.id.to_string())
