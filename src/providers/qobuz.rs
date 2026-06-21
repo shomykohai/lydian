@@ -392,12 +392,7 @@ impl<'a> TryFrom<QobuzTrack> for Song<'a> {
             disc_number: trk.media_number.map(|m| m as u32),
             created: None,
             starred: None,
-            album_id: trk
-                .album
-                .as_ref()
-                .and_then(|a| a.id.clone())
-                .map(Cow::Owned)
-                .map(Into::into),
+            album_id: trk.album.as_ref().and_then(|a| a.id.clone()).map(Cow::Owned).map(Into::into),
             artist_id: performer_list
                 .as_ref()
                 .and_then(|list| list.first())
@@ -526,6 +521,7 @@ impl MusicProvider for QobuzDlClient {
         album.tag_origin(self.id(), IdType::Album);
         album.song.iter_mut().for_each(|song| {
             song.suffix = Some(format!("Remote ({})", self.id()).into());
+            song.cover_art = album.base.cover_art.clone();
         });
         Ok(album)
     }
