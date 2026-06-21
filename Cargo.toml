@@ -21,6 +21,7 @@ image = "0.25.10"
 ipnetwork = { version = "0.21.1", features = ["serde"] }
 log = "0.4.31"
 md5 = "0.8.0"
+mime-type = "0.2.0"
 moka = { version = "0.12.15", features = ["future"] }
 musicbrainz_rs = { version = "0.13.0", features = ["async"] }
 quick-xml = "0.40.1"

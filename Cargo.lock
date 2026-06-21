@@ -2145,6 +2145,7 @@ dependencies = [
  "ipnetwork",
  "log",
  "md5",
+ "mime-type",
  "moka",
  "musicbrainz_rs",
  "quick-xml",
@@ -2225,6 +2226,12 @@ name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
+
+[[package]]
+name = "mime-type"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e3e3895477670a13f7d4bd8c675538c1a45cc222161809aef077ce2b2aa4174"
 
 [[package]]
 name = "mime_guess"
