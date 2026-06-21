@@ -88,6 +88,23 @@ impl DiskDriver {
         Ok(file)
     }
 
+    pub async fn get_file_by_prefix(&self, key: &str) -> Result<File> {
+        if let Some(path) = self.resolve_path_prefix(key).await {
+            let file = File::open(path).await?;
+            return Ok(file);
+        }
+
+        bail!("No cached file found matching key prefix: {}", key);
+    }
+
+    pub async fn get_extension_by_prefix(&self, key: &str) -> Option<String> {
+        if let Some(path) = self.resolve_path_prefix(key).await {
+            return path.extension().map(|ext| ext.to_string_lossy().to_string());
+        }
+
+        None
+    }
+
     pub async fn read_stream(&self, key: &str) -> Result<LocalFile> {
         let file = File::open(self.resolve_path(key)).await?;
         Ok(LocalFile { path: self.resolve_path(key), stream: ReaderStream::new(file) })
