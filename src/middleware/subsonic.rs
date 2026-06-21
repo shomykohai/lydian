@@ -170,7 +170,7 @@ impl<'a> SubsonicClient<'a> {
             ("s", &salt),
             ("f", "json"),
             ("v", SUBSONIC_API_VERSION),
-            ("c", "myapp"),
+            ("c", "lydian"),
         ];
 
         Ok(self.client.get(url).query(&params))
