@@ -44,13 +44,15 @@ pub async fn get_top_songs(
         unified_result.song.append(&mut answer.song);
     }
 
-    service.call(op).await.map_or_else(
-        |_| subsonic.build_error(format, SubsonicErrorCode::NotFound),
-        |songs| {
-            unified_result.merge(songs);
-            subsonic.build_response(format, StatusCode::OK, Some(unified_result))
-        },
-    )
+    if let Ok(remote_songs) = service.call(op).await {
+        unified_result.merge(remote_songs);
+    }
+
+    if unified_result.song.is_empty() {
+        subsonic.build_error(format, SubsonicErrorCode::NotFound)
+    } else {
+        subsonic.build_response(format, StatusCode::OK, Some(unified_result))
+    }
 }
 
 pub async fn get_song(
