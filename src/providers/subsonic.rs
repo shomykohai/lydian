@@ -84,12 +84,8 @@ impl MusicProvider for SubsonicProvider {
         url.query_pairs_mut().append_pair("id", raw_id);
 
         let req = self.client.get(url).query(&self.build_auth_query());
-        let res = req
-            .send()
-            .await?
-            .json::<SubsonicResponse<ArtistWithAlbumsID3<'static>>>()
-            .await
-            .unwrap();
+        let res =
+            req.send().await?.json::<SubsonicResponse<ArtistWithAlbumsID3<'static>>>().await?;
 
         if let Some(mut artist) = res.answer {
             artist.tag_origin(self.id(), IdType::Artist);
@@ -227,8 +223,7 @@ impl MusicProvider for SubsonicProvider {
             req = req.query(&[("songCount", count)]);
         }
 
-        let res =
-            req.send().await?.json::<SubsonicResponse<SearchResult<'static>>>().await.unwrap();
+        let res = req.send().await?.json::<SubsonicResponse<SearchResult<'static>>>().await?;
 
         if let Some(mut search_results) = res.answer {
             search_results.tag_origin(self.id(), IdType::Generic);
