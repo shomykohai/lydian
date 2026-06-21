@@ -145,7 +145,7 @@ impl LydianConfig {
             .set_default("cache.ttl_seconds", 3600)?
             .set_default("cache.max_cache_size", Some(100 * 1024 * 1024))?
             .set_default("cache.db_ttl_seconds", 86400)?
-            .set_default("cache.temp_file_ttl_seconds", 10800)?
+            .set_default("cache.temp_file_ttl_seconds", 259200)?
             .set_default("cache.cleanup_service_interval_seconds", 1800)?
             .set_default("download.download_path", "/app/downloads")?
             .set_default("download.max_workers", 4)?
