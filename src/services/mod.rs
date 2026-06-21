@@ -1,6 +1,7 @@
 mod cache;
 mod library_migration;
 mod remote;
+mod stale_migrations_cleanup;
 
 use std::sync::Arc;
 
@@ -11,10 +12,12 @@ use reqwest::Client;
 use thiserror::Error as TError;
 use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinHandle;
+use tower::ServiceExt;
 
 use crate::AppState;
 use crate::config::LydianConfig;
 use crate::services::cache::CacheCleanupService;
+use crate::services::stale_migrations_cleanup::StaleMigrationsCleanupService;
 use crate::storage::DiskDriver;
 use crate::workers::download::{DownloadJob, DownloadManager};
 
@@ -49,10 +52,11 @@ impl ServiceManager {
         Self { download_queue: Mutex::new(Some(tx)), worker_tasks: Arc::new(Mutex::new(handles)) }
     }
 
-    pub fn start_services(&self, state: Arc<AppState>) {
+    pub async fn start_services(&self, state: Arc<AppState>) {
         info!("Starting background services...");
 
-        CacheCleanupService::start(state);
+        CacheCleanupService::start(state.clone());
+        StaleMigrationsCleanupService::new(state).oneshot(()).await.ok();
 
         debug!("All background services started successfully.");
     }

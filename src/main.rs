@@ -106,7 +106,7 @@ async fn main() -> Result<()> {
 
     let state = AppState::init(config).await?;
 
-    state.services.start_services(state.clone());
+    state.services.start_services(state.clone()).await;
 
     let app = AppRouter::init(state.clone()).await?;
 
