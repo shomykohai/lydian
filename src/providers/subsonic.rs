@@ -93,6 +93,7 @@ impl MusicProvider for SubsonicProvider {
 
         if let Some(mut artist) = res.answer {
             artist.tag_origin(self.id(), IdType::Artist);
+            artist.base.starred = None;
             Ok(artist)
         } else {
             bail!("Failed to fetch artist from federated server: {:?}", res.error)
@@ -146,10 +147,14 @@ impl MusicProvider for SubsonicProvider {
 
         if let Some(mut album) = res.answer {
             album.tag_origin(self.id(), IdType::Album);
+            album.base.starred = None;
+            album.base.played = None;
             album.song.iter_mut().for_each(|song| {
                 song.suffix = Some(
                     format!("{} ({})", song.suffix.clone().unwrap_or_default(), self.id()).into(),
                 );
+                song.starred = None;
+                song.played = None;
             });
             Ok(album)
         } else {
@@ -169,6 +174,8 @@ impl MusicProvider for SubsonicProvider {
 
         if let Some(mut song) = res.answer {
             song.tag_origin(self.id(), IdType::Song);
+            song.starred = None;
+            song.played = None;
             song.suffix =
                 Some(format!("{} ({})", song.suffix.clone().unwrap_or_default(), self.id()).into());
             Ok(song)
@@ -195,6 +202,8 @@ impl MusicProvider for SubsonicProvider {
                 song.suffix = Some(
                     format!("{} ({})", song.suffix.clone().unwrap_or_default(), self.id()).into(),
                 );
+                song.starred = None;
+                song.played = None;
             });
             Ok(top_songs)
         } else {
