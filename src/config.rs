@@ -9,6 +9,7 @@ use log::{LevelFilter, info, warn};
 use serde::{Deserialize, Serialize};
 
 use crate::logger;
+use crate::models::SubsonicStreamFormat;
 use crate::providers::{MusicProvider, QobuzDlClient, SubsonicProvider};
 
 pub const TEMPLATE_ARTIST: &str = "{artist}";
@@ -50,6 +51,23 @@ pub struct SubsonicConfig {
     /// The folder where the music files will be stored.
     /// This is the Subsonic music folder.
     pub music_folder: String,
+    /// Whether to enable multi-user library support.
+    /// If enabled, the server will perform the following actions differently:
+    /// - The music folder defined in subsonic.music_folder will be used as the root folder for all
+    ///   users.
+    /// - Lydian will create (if not exists) a subfolder for each user in the music folder, named
+    ///   after the username. make sure the user has access to that folder.
+    /// - The folder template defined in subsonic.folder_template will be used to organize the
+    ///   downloaded files in the user's subfolder.
+    /// - Lydian downloads will be stored in subsonic.music_folder/lydian, and will then copy the
+    ///   downloaded files to the user's subfolder according to the folder template. This is to
+    ///   ensure downloaded files are not duplicated for each user.
+    pub multi_user_library: bool,
+    /// The template for the multi-user library.
+    /// This gets appended before `folder_template` when `multi_user_library` is enabled.
+    /// The following placeholders are supported:
+    /// - {username}: The username of the user.
+    pub multi_user_library_template: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -62,8 +80,19 @@ pub struct DownloadConfig {
     /// Default is 4.
     pub max_workers: usize,
     /// The quality of the downloaded files.
-    /// Defaults to "flac". Currently not used.
-    pub quality: String,
+    /// Defaults to "flac".
+    pub quality: SubsonicStreamFormat,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct TranscodingConfig {
+    /// The path to the ffmpeg binary.
+    /// If null, will try to call ffmpeg from the PATH.
+    /// (Not implemented yet, will default to PATH ffmpeg for now)
+    pub ffmpeg_path: Option<String>,
+    /// The maximum number of concurrent transcodes.
+    /// If null, will default to 5.
+    pub max_concurrent_transcodes: usize,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -124,6 +153,7 @@ pub struct LydianConfig {
     pub subsonic: SubsonicConfig,
     pub cache: CacheConfig,
     pub download: DownloadConfig,
+    pub transcoding: TranscodingConfig,
     pub lyrics: LyricsConfig,
     pub providers: ProvidersConfig,
 }
@@ -137,11 +167,15 @@ impl LydianConfig {
             .set_default("server.port", 8080)?
             .set_default("server.log_level", "info")?
             .set_default("server.database_url", "sqlite://lydian.db")?
+            .set_default("transcoding.ffmpeg_path", None::<String>)?
+            .set_default("transcoding.max_concurrent_transcodes", Some(5))?
             .set_default("subsonic.url", "http://localhost:4533")?
             .set_default("subsonic.username", "")?
             .set_default("subsonic.password", "")?
             .set_default("subsonic.folder_template", "{artist}/{album}/{track} - {title}")?
             .set_default("subsonic.music_folder", "/app/music")?
+            .set_default("subsonic.multi_user_library", false)?
+            .set_default("subsonic.multi_user_library_template", "{username}")?
             .set_default("cache.ttl_seconds", 3600)?
             .set_default("cache.max_cache_size", Some(100 * 1024 * 1024))?
             .set_default("cache.db_ttl_seconds", 86400)?
