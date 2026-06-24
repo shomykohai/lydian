@@ -54,6 +54,7 @@
         pkgs.libtool
         pkgs.pkg-config
         pkgs.gawk
+        pkgs.ffmpeg
       ];
 
       CFLAGS = "-DJEMALLOC_STRERROR_R_RETURNS_CHAR_WITH_GNU_SOURCE";
