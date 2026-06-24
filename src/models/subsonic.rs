@@ -1,9 +1,11 @@
 use std::collections::HashMap;
+use std::fmt::Display;
 
 use anyhow::Result;
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
+use mime_type::Audio;
 use reqwest::Response;
 use serde::de::Error;
 use serde::ser::SerializeMap;
@@ -19,6 +21,72 @@ use crate::models::CowStr;
 pub enum SubsonicRespFormat {
     Json,
     Xml,
+}
+
+#[derive(Default, Clone, Copy, PartialEq, Eq, Debug, Hash, Serialize)]
+pub enum SubsonicStreamFormat {
+    #[default]
+    Raw,
+    Mp3,
+    Ogg,
+    Flac,
+    Aac,
+}
+
+impl<'de> Deserialize<'de> for SubsonicStreamFormat {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        log::info!("Deserializing SubsonicStreamFormat from string: {}", s);
+        match s.as_str() {
+            "raw" => Ok(Self::Raw),
+            "mp3" => Ok(Self::Mp3),
+            "opus" | "ogg" => Ok(Self::Ogg),
+            "flac" => Ok(Self::Flac),
+            "aac" => Ok(Self::Aac),
+            /* Seems like subsonic servers default to raw format */
+            _ => Ok(Self::Raw),
+        }
+    }
+}
+
+impl Display for SubsonicStreamFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::Raw => "raw",
+            Self::Mp3 => "mp3",
+            Self::Ogg => "ogg",
+            Self::Flac => "flac",
+            Self::Aac => "aac",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+impl From<Audio> for SubsonicStreamFormat {
+    fn from(audio: Audio) -> Self {
+        match audio {
+            Audio::Mpeg => Self::Mp3,
+            Audio::Ogg => Self::Ogg,
+            Audio::Flac => Self::Flac,
+            Audio::Aac => Self::Aac,
+            _ => Self::Raw,
+        }
+    }
+}
+
+impl SubsonicStreamFormat {
+    pub const fn mime_type(&self) -> &'static str {
+        match self {
+            Self::Raw => "audio/mpeg",
+            Self::Mp3 => "audio/mpeg",
+            Self::Ogg => "audio/ogg",
+            Self::Flac => "audio/flac",
+            Self::Aac => "audio/aac",
+        }
+    }
 }
 
 #[derive(Debug)]

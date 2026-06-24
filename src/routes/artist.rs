@@ -19,13 +19,15 @@ pub async fn get_artist_info(
 
     let (parts, body) = req.into_parts();
 
-    if let Some(final_response) = subsonic.try_req::<ArtistInfo<'_>>(format, &parts, body).await {
-        return final_response;
-    }
-
     let Ok(op) = subsonic.parse_query::<GetArtistInfo<'_>>(&parts) else {
         return subsonic.build_error(format, SubsonicErrorCode::RequiredParameterMissing);
     };
+
+    if !op.id.is_external()
+        && let Some(final_response) = subsonic.try_req::<ArtistInfo<'_>>(format, &parts, body).await
+    {
+        return final_response;
+    }
 
     let mut service = RemoteLookupService { remotes: &state.remotes, cache: state.cache.clone() };
 
@@ -45,15 +47,16 @@ pub async fn get_artist(
 
     let (parts, body) = req.into_parts();
 
-    if let Some(final_response) =
-        subsonic.try_req::<ArtistWithAlbumsID3>(format, &parts, body).await
-    {
-        return final_response;
-    }
-
     let Ok(op) = subsonic.parse_query::<GetArtist<'_>>(&parts) else {
         return subsonic.build_error(format, SubsonicErrorCode::RequiredParameterMissing);
     };
+
+    if !op.id.is_external()
+        && let Some(final_response) =
+            subsonic.try_req::<ArtistWithAlbumsID3>(format, &parts, body).await
+    {
+        return final_response;
+    }
 
     let mut service = RemoteLookupService { remotes: &state.remotes, cache: state.cache.clone() };
 

@@ -13,10 +13,11 @@ use crate::models::{
     ArtistInfo,
     ArtistWithAlbumsID3,
     FuzzyMatch,
-    IdType,
+    Id,
     ORIGIN_SEP,
     SearchResult,
     Song,
+    SubsonicStreamFormat,
     TopSongs,
 };
 use crate::services::StreamMedia;
@@ -34,10 +35,10 @@ pub struct SearchRequest<'a> {
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct StreamRequest {
-    pub id: String,
+pub struct StreamRequest<'a> {
+    pub id: Id<'a>,
     pub max_bit_rate: Option<u32>,
-    pub format: Option<String>,
+    pub format: Option<SubsonicStreamFormat>,
     pub time_offset: Option<u32>,
     pub size: Option<String>,
     pub estimate_content_length: Option<bool>,
@@ -56,30 +57,19 @@ pub trait MusicProvider: Send + Sync {
             .map_or(id, |idx| &id[idx + ORIGIN_SEP.len()..])
     }
 
-    fn to_id(&self, id: &str, id_type: IdType) -> String {
-        format!("{}{}{}{}{}", self.id(), ORIGIN_SEP, id_type.as_str(), ORIGIN_SEP, id)
+    fn is_own_id(&self, id: &Id<'_>) -> bool {
+        id.service().is_some_and(|service| service == self.id())
     }
 
-    fn is_own_id(&self, id: &str) -> bool {
-        id.strip_prefix(self.id()).and_then(|rem| rem.strip_prefix(ORIGIN_SEP)).is_some()
-    }
-
-    fn get_id_type(&self, id: &str) -> Option<IdType> {
-        let remainder = id.strip_prefix(self.id())?.strip_prefix(ORIGIN_SEP)?;
-
-        let type_part = remainder.split(ORIGIN_SEP).next()?;
-        IdType::from_str(type_part)
-    }
-
-    async fn get_artist<'a>(&self, id: &str) -> Result<ArtistWithAlbumsID3<'a>>;
-    async fn get_artist_info<'a>(&self, id: &str) -> Result<ArtistInfo<'a>>;
-    async fn get_album_info<'a>(&self, id: &str) -> Result<AlbumInfo<'a>>;
-    async fn get_album<'a>(&self, id: &str) -> Result<AlbumWithSongsID3<'a>>;
-    async fn get_song<'a>(&self, id: &str) -> Result<Song<'a>>;
+    async fn get_artist<'a>(&self, id: &Id<'_>) -> Result<ArtistWithAlbumsID3<'a>>;
+    async fn get_artist_info<'a>(&self, id: &Id<'_>) -> Result<ArtistInfo<'a>>;
+    async fn get_album_info<'a>(&self, id: &Id<'_>) -> Result<AlbumInfo<'a>>;
+    async fn get_album<'a>(&self, id: &Id<'_>) -> Result<AlbumWithSongsID3<'a>>;
+    async fn get_song<'a>(&self, id: &Id<'_>) -> Result<Song<'a>>;
     async fn get_top_songs<'a>(&self, artist: &str, count: Option<u32>) -> Result<TopSongs<'a>>;
 
     async fn search<'a>(&self, query: &SearchRequest<'a>) -> Result<SearchResult<'a>>;
-    async fn get_cover_art(&self, id: &str, size: Option<u32>) -> Result<reqwest::Response>;
+    async fn get_cover_art(&self, id: &Id<'_>, size: Option<u32>) -> Result<reqwest::Response>;
 
     async fn stream(&self, req: &StreamMedia) -> Result<reqwest::Response>;
 
@@ -103,7 +93,7 @@ pub trait MusicProvider: Send + Sync {
         let mut albums = Vec::with_capacity(10);
 
         for album in &search_result.album {
-            if let Ok(album) = self.get_album(&album.id.to_string()).await {
+            if let Ok(album) = self.get_album(&album.id).await {
                 albums.push(album);
             }
         }

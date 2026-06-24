@@ -80,8 +80,8 @@ impl IdType {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(from = "CowStr<'a>", into = "String")]
 pub enum Id<'a> {
-    Local { key: CowStr<'a> },
-    External { origin: CowStr<'a>, id_type: IdType, key: CowStr<'a> },
+    Local { raw: CowStr<'a> },
+    External { origin: CowStr<'a>, id_type: IdType, key: CowStr<'a>, raw: CowStr<'a> },
 }
 
 impl<'a> Id<'a> {
@@ -103,6 +103,7 @@ impl<'a> Id<'a> {
                                 origin: Cow::Borrowed(origin),
                                 id_type,
                                 key: Cow::Borrowed(key),
+                                raw: Cow::Borrowed(s),
                             }
                         }
                         Cow::Owned(s) => {
@@ -113,31 +114,30 @@ impl<'a> Id<'a> {
                                 origin: Cow::Owned(origin),
                                 id_type,
                                 key: Cow::Owned(key),
+                                raw: Cow::Owned(s),
                             }
                         }
                     };
                 }
             }
         }
-        Self::Local { key: raw }
+        Self::Local { raw }
     }
 
     pub const fn is_external(&self) -> bool {
         matches!(self, Self::External { .. })
     }
 
-    pub fn to_raw_string(&self) -> String {
+    pub fn raw(&self) -> &str {
         match self {
-            Self::Local { key } => key.to_string(),
-            Self::External { origin, id_type, key } => {
-                format!("{}{}{}{}{}", origin, ORIGIN_SEP, id_type.as_str(), ORIGIN_SEP, key)
-            }
+            Self::Local { raw, .. } => raw,
+            Self::External { raw, .. } => raw,
         }
     }
 
     pub fn is_empty(&self) -> bool {
         match self {
-            Self::Local { key } => key.is_empty(),
+            Self::Local { raw } => raw.is_empty(),
             Self::External { key, .. } => key.is_empty(),
         }
     }
@@ -155,11 +155,18 @@ impl<'a> Id<'a> {
             Self::External { id_type, .. } => *id_type,
         }
     }
+
+    pub fn key(&self) -> &str {
+        match self {
+            Self::Local { raw } => raw,
+            Self::External { key, .. } => key,
+        }
+    }
 }
 
 impl<'a> Default for Id<'a> {
     fn default() -> Self {
-        Self::Local { key: Cow::Borrowed("") }
+        Self::Local { raw: Cow::Borrowed("") }
     }
 }
 
@@ -204,13 +211,13 @@ where
 
 impl<'a> From<Id<'a>> for String {
     fn from(id: Id<'a>) -> Self {
-        id.to_raw_string()
+        id.raw().to_string()
     }
 }
 
 impl Display for Id<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.to_raw_string())
+        write!(f, "{}", self.raw())
     }
 }
 
@@ -246,10 +253,16 @@ impl<T: TagOrigin> TagOrigin for Vec<T> {
 
 impl<'a> TagOrigin for Id<'a> {
     fn tag_origin(&mut self, origin: &str, id_type: IdType) {
-        if let Self::Local { key } = self {
-            let new_key = std::mem::replace(key, Cow::Borrowed(""));
-            *self =
-                Self::External { origin: Cow::Owned(origin.to_string()), id_type, key: new_key };
+        if let Self::Local { raw } = self {
+            let new_key = std::mem::replace(raw, Cow::Borrowed(""));
+            let new_raw =
+                format!("{}{}{}{}", origin, ORIGIN_SEP, id_type.as_str(), ORIGIN_SEP) + &new_key;
+            *self = Self::External {
+                origin: Cow::Owned(origin.to_string()),
+                id_type,
+                key: new_key,
+                raw: Cow::Owned(new_raw),
+            };
         }
     }
 }

@@ -1,9 +1,12 @@
 use std::path::Path;
 
+use crate::models::SubsonicStreamFormat;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum StorageKey {
-    Media { id: String },
+    Media { id: String, format: SubsonicStreamFormat },
     CoverArt { id: String, size: u32 },
+    TranscodedMedia { id: String, format: SubsonicStreamFormat, bitrate: u32, offset: u32 },
 }
 
 impl StorageKey {
@@ -17,8 +20,18 @@ impl StorageKey {
         };
 
         match self {
-            Self::Media { id } => format!("media/{}", sanitized(id)),
+            Self::Media { id, format } => format!("media/{}_{}", sanitized(id), format),
             Self::CoverArt { id, size } => format!("image/{}_{}", sanitized(id), size),
+            Self::TranscodedMedia { id, format, bitrate, offset } => {
+                format!(
+                    "cache/transcodes/{}_{}_{}_{}.{}",
+                    sanitized(id),
+                    format,
+                    bitrate,
+                    offset,
+                    format
+                )
+            }
         }
     }
 
@@ -26,6 +39,7 @@ impl StorageKey {
         match self {
             Self::Media { .. } => "audio/mpeg",
             Self::CoverArt { .. } => "image/jpeg",
+            Self::TranscodedMedia { format, .. } => format.mime_type(),
         }
     }
 }

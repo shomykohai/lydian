@@ -6,12 +6,13 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::{RemoteError, RemoteOperation};
-use crate::models::{ORIGIN_SEP, Song};
+use crate::models::{Id, Song};
 use crate::providers::MusicProvider;
 
 #[derive(Debug, Deserialize)]
 pub struct GetSong<'op> {
-    pub id: &'op str,
+    #[serde(borrow)]
+    pub id: Id<'op>,
 }
 
 #[async_trait]
@@ -19,7 +20,7 @@ impl<'op> RemoteOperation for GetSong<'op> {
     type Output = Song<'op>;
 
     fn target(&self) -> &str {
-        if let Some((prefix, _)) = self.id.split_once(ORIGIN_SEP) { prefix } else { "" }
+        self.id.service().unwrap_or("")
     }
 
     fn broadcast(&self) -> bool {
@@ -27,7 +28,7 @@ impl<'op> RemoteOperation for GetSong<'op> {
     }
 
     async fn execute(&self, provider: &dyn MusicProvider) -> Result<Self::Output> {
-        provider.get_song(self.id).await
+        provider.get_song(&self.id).await
     }
 
     fn process(&self, mut items: Vec<Self::Output>) -> Result<Self::Output, RemoteError> {
@@ -38,8 +39,8 @@ impl<'op> RemoteOperation for GetSong<'op> {
         Ok(items.remove(0))
     }
 
-    fn cache_key(&self) -> Option<Cow<'op, str>> {
-        Some(Cow::Borrowed(self.id))
+    fn cache_key(&self) -> Option<Cow<'_, str>> {
+        Some(Cow::Borrowed(self.id.raw()))
     }
 
     fn deserialize(&self, value: Value) -> Option<Self::Output> {

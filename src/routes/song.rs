@@ -65,13 +65,15 @@ pub async fn get_song(
 
     let (parts, body) = req.into_parts();
 
-    if let Some(final_response) = subsonic.try_req::<Song<'_>>(format, &parts, body).await {
-        return final_response;
-    }
-
     let Ok(op) = subsonic.parse_query::<GetSong<'_>>(&parts) else {
         return subsonic.build_error(format, SubsonicErrorCode::RequiredParameterMissing);
     };
+
+    if !op.id.is_external()
+        && let Some(final_response) = subsonic.try_req::<Song<'_>>(format, &parts, body).await
+    {
+        return final_response;
+    }
 
     let mut service = RemoteLookupService { remotes: &state.remotes, cache: state.cache.clone() };
 

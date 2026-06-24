@@ -15,6 +15,7 @@ use crate::models::{
     ArtistID3,
     ArtistInfo,
     ArtistWithAlbumsID3,
+    Id,
     IdType,
     ItemDate,
     ItemGenre,
@@ -22,6 +23,7 @@ use crate::models::{
     ReplayGain,
     SearchResult,
     Song,
+    SubsonicStreamFormat,
     TagOrigin,
     TopSongs,
     Work,
@@ -462,11 +464,10 @@ impl MusicProvider for QobuzDlClient {
         &self.provider_id
     }
 
-    async fn get_artist<'a>(&self, id: &str) -> Result<ArtistWithAlbumsID3<'a>> {
+    async fn get_artist<'a>(&self, id: &Id<'_>) -> Result<ArtistWithAlbumsID3<'a>> {
         let url = format!("{}get-artist", self.url);
-        let raw_id = self.get_raw_id(id);
 
-        let response = self.client.get(&url).query(&[("artist_id", raw_id)]).send().await?;
+        let response = self.client.get(&url).query(&[("artist_id", id.key())]).send().await?;
 
         if !response.status().is_success() {
             return Err(RemoteError::Status(response.status()).into());
@@ -482,15 +483,14 @@ impl MusicProvider for QobuzDlClient {
         Ok(artist)
     }
 
-    async fn get_artist_info<'a>(&self, _id: &str) -> Result<ArtistInfo<'a>> {
+    async fn get_artist_info<'a>(&self, _id: &Id<'_>) -> Result<ArtistInfo<'a>> {
         unimplemented!()
     }
 
-    async fn get_album_info<'a>(&self, id: &str) -> Result<AlbumInfo<'a>> {
+    async fn get_album_info<'a>(&self, id: &Id<'_>) -> Result<AlbumInfo<'a>> {
         let url = format!("{}get-album", self.url);
-        let raw_id = self.get_raw_id(id);
 
-        let response = self.client.get(&url).query(&[("album_id", raw_id)]).send().await?;
+        let response = self.client.get(&url).query(&[("album_id", id.key())]).send().await?;
 
         if !response.status().is_success() {
             return Err(RemoteError::Status(response.status()).into());
@@ -502,11 +502,10 @@ impl MusicProvider for QobuzDlClient {
         AlbumInfo::try_from(data).map_err(|_| RemoteError::ProcessingError.into())
     }
 
-    async fn get_album<'a>(&self, id: &str) -> Result<AlbumWithSongsID3<'a>> {
+    async fn get_album<'a>(&self, id: &Id<'_>) -> Result<AlbumWithSongsID3<'a>> {
         let url = format!("{}get-album", self.url);
-        let raw_id = self.get_raw_id(id);
 
-        let response = self.client.get(&url).query(&[("album_id", raw_id)]).send().await?;
+        let response = self.client.get(&url).query(&[("album_id", id.key())]).send().await?;
 
         if !response.status().is_success() {
             return Err(RemoteError::Status(response.status()).into());
@@ -526,12 +525,11 @@ impl MusicProvider for QobuzDlClient {
         Ok(album)
     }
 
-    async fn get_song<'a>(&self, id: &str) -> Result<Song<'a>> {
+    async fn get_song<'a>(&self, id: &Id<'_>) -> Result<Song<'a>> {
         let url = format!("{}get-music", self.url);
-        let raw_id = self.get_raw_id(id);
 
         let response =
-            self.client.get(&url).query(&[("q", raw_id)]).query(&[("offset", 0)]).send().await?;
+            self.client.get(&url).query(&[("q", id.key())]).query(&[("offset", 0)]).send().await?;
 
         if !response.status().is_success() {
             return Err(RemoteError::Status(response.status()).into());
@@ -589,12 +587,12 @@ impl MusicProvider for QobuzDlClient {
         Ok(search_result)
     }
 
-    async fn get_cover_art(&self, id: &str, _size: Option<u32>) -> Result<Response> {
-        let raw_id = self.get_raw_id(id);
+    async fn get_cover_art(&self, id: &Id<'_>, _size: Option<u32>) -> Result<Response> {
+        let raw_id = id.key();
 
         let target_url = if let Some(remaining) = raw_id.strip_prefix("al_") {
             format!("https://static.qobuz.com/images/covers/{}", remaining.replace("-", "/"))
-        } else if let Some(remaining) = id.strip_prefix("ar_") {
+        } else if let Some(remaining) = raw_id.strip_prefix("ar_") {
             format!(
                 "https://static.qobuz.com/images/artists/covers/{}",
                 remaining.replace("-", "/")
@@ -608,8 +606,22 @@ impl MusicProvider for QobuzDlClient {
     }
 
     async fn stream(&self, req: &StreamMedia) -> Result<Response> {
-        let raw_id = self.get_raw_id(&req.request.id);
-        let url = format!("{}download-music?track_id={}&quality=27", self.url, raw_id);
+        let quality = req
+            .request
+            .format
+            .as_ref()
+            .map(|f| match f {
+                SubsonicStreamFormat::Flac => "27",
+                _ => "5",
+            })
+            .unwrap_or_else(|| "27");
+
+        let url = format!(
+            "{}download-music?track_id={}&quality={}",
+            self.url,
+            req.request.id.key(),
+            quality
+        );
 
         let response = self.client.get(&url).send().await?;
 

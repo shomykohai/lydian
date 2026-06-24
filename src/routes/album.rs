@@ -26,13 +26,15 @@ pub async fn get_album_info<'a>(
 
     let (parts, body) = req.into_parts();
 
-    if let Some(subsonic_resp) = subsonic.try_req::<AlbumInfo<'a>>(format, &parts, body).await {
-        return subsonic_resp;
-    }
-
     let Ok(op) = subsonic.parse_query::<GetAlbumInfo<'_>>(&parts) else {
         return subsonic.build_error(format, SubsonicErrorCode::RequiredParameterMissing);
     };
+
+    if !op.id.is_external()
+        && let Some(subsonic_resp) = subsonic.try_req::<AlbumInfo<'a>>(format, &parts, body).await
+    {
+        return subsonic_resp;
+    }
 
     let mut service = RemoteLookupService { remotes: &state.remotes, cache: state.cache.clone() };
 
@@ -52,18 +54,24 @@ pub async fn get_album<'a>(
 
     let (parts, body) = req.into_parts();
 
-    let mut subsonic_resp = subsonic
-        .request::<AlbumWithSongsID3<'_>>(
-            parts.method.clone(),
-            parts.uri.path(),
-            parts.uri.query(),
-            parts.headers.clone(),
-            Some(body),
-        )
-        .await;
-
     let Ok(op) = subsonic.parse_query::<GetAlbum<'_>>(&parts) else {
         return subsonic.build_error(format, SubsonicErrorCode::RequiredParameterMissing);
+    };
+
+    let mut subsonic_resp = if !op.id.is_external() {
+        Some(
+            subsonic
+                .request::<AlbumWithSongsID3<'_>>(
+                    parts.method.clone(),
+                    parts.uri.path(),
+                    parts.uri.query(),
+                    parts.headers.clone(),
+                    Some(body),
+                )
+                .await,
+        )
+    } else {
+        None
     };
 
     let is_migrated: bool = sqlx::query_scalar(
@@ -74,8 +82,8 @@ pub async fn get_album<'a>(
         )
         "#,
     )
-    .bind(op.id)
-    .bind(op.id)
+    .bind(op.id.raw())
+    .bind(op.id.raw())
     .fetch_one(&state.storage.db)
     .await
     .unwrap_or(false);
@@ -84,7 +92,7 @@ pub async fn get_album<'a>(
      * wasting time. So, we just return the subsonic response since
      * we are sure it contains the full album.
      */
-    if is_migrated && let Ok(sub_resp) = subsonic_resp {
+    if is_migrated && let Some(Ok(sub_resp)) = subsonic_resp {
         /* TODO: Consider if we should update the migration with the new navidrome ID if not set */
         return sub_resp.into_response();
     }
@@ -94,7 +102,7 @@ pub async fn get_album<'a>(
     let mut unified_result = AlbumWithSongsID3::default();
     let mut origin_track_count = 0;
 
-    if let Ok(ref mut resp) = subsonic_resp
+    if let Some(Ok(ref mut resp)) = subsonic_resp
         && !resp.is_err()
         && let Some(ref mut answer) = resp.answer
     {
@@ -130,7 +138,7 @@ pub async fn get_album<'a>(
                             "#,
                         )
                         .bind(album.base.id.to_string())
-                        .bind(op.id)
+                        .bind(op.id.raw())
                         .execute(&state.storage.db)
                         .await
                         .ok();

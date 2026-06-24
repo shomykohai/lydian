@@ -10,6 +10,7 @@ use crate::models::{
     AlbumWithSongsID3,
     ArtistInfo,
     ArtistWithAlbumsID3,
+    Id,
     IdType,
     SearchResult,
     Song,
@@ -76,12 +77,10 @@ impl MusicProvider for SubsonicProvider {
         self.provider_id.as_str()
     }
 
-    async fn get_artist<'a>(&self, id: &str) -> Result<ArtistWithAlbumsID3<'a>> {
+    async fn get_artist<'a>(&self, id: &Id<'_>) -> Result<ArtistWithAlbumsID3<'a>> {
         let mut url = self.base_url.join("/rest/getArtist")?;
 
-        let raw_id = self.get_raw_id(id);
-
-        url.query_pairs_mut().append_pair("id", raw_id);
+        url.query_pairs_mut().append_pair("id", id.key());
 
         let req = self.client.get(url).query(&self.build_auth_query());
         let res =
@@ -96,12 +95,10 @@ impl MusicProvider for SubsonicProvider {
         }
     }
 
-    async fn get_artist_info<'a>(&self, id: &str) -> Result<ArtistInfo<'a>> {
+    async fn get_artist_info<'a>(&self, id: &Id<'_>) -> Result<ArtistInfo<'a>> {
         let mut url = self.base_url.join("/rest/getArtistInfo")?;
 
-        let raw_id = self.get_raw_id(id);
-
-        url.query_pairs_mut().append_pair("id", raw_id);
+        url.query_pairs_mut().append_pair("id", id.key());
 
         let req = self.client.get(url).query(&self.build_auth_query());
         let res = req.send().await?.json::<SubsonicResponse<ArtistInfo<'static>>>().await?;
@@ -114,12 +111,10 @@ impl MusicProvider for SubsonicProvider {
         }
     }
 
-    async fn get_album_info<'a>(&self, id: &str) -> Result<AlbumInfo<'a>> {
+    async fn get_album_info<'a>(&self, id: &Id<'_>) -> Result<AlbumInfo<'a>> {
         let mut url = self.base_url.join("/rest/getAlbumInfo2")?;
 
-        let raw_id = self.get_raw_id(id);
-
-        url.query_pairs_mut().append_pair("id", raw_id);
+        url.query_pairs_mut().append_pair("id", id.key());
 
         let req = self.client.get(url).query(&self.build_auth_query());
         let res = req.send().await?.json::<SubsonicResponse<AlbumInfo<'static>>>().await?;
@@ -131,12 +126,10 @@ impl MusicProvider for SubsonicProvider {
         }
     }
 
-    async fn get_album<'a>(&self, id: &str) -> Result<AlbumWithSongsID3<'a>> {
+    async fn get_album<'a>(&self, id: &Id<'_>) -> Result<AlbumWithSongsID3<'a>> {
         let mut url = self.base_url.join("/rest/getAlbum")?;
 
-        let raw_id = self.get_raw_id(id);
-
-        url.query_pairs_mut().append_pair("id", raw_id);
+        url.query_pairs_mut().append_pair("id", id.key());
 
         let req = self.client.get(url).query(&self.build_auth_query());
         let res = req.send().await?.json::<SubsonicResponse<AlbumWithSongsID3<'static>>>().await?;
@@ -158,12 +151,10 @@ impl MusicProvider for SubsonicProvider {
         }
     }
 
-    async fn get_song<'a>(&self, id: &str) -> Result<Song<'a>> {
+    async fn get_song<'a>(&self, id: &Id<'_>) -> Result<Song<'a>> {
         let mut url = self.base_url.join("/rest/getSong")?;
 
-        let raw_id = self.get_raw_id(id);
-
-        url.query_pairs_mut().append_pair("id", raw_id);
+        url.query_pairs_mut().append_pair("id", id.key());
 
         let req = self.client.get(url).query(&self.build_auth_query());
         let res = req.send().await?.json::<SubsonicResponse<Song<'static>>>().await?;
@@ -229,16 +220,16 @@ impl MusicProvider for SubsonicProvider {
             search_results.tag_origin(self.id(), IdType::Generic);
             Ok(search_results)
         } else {
+            log::error!("Search failed on federated server: {:?}", res.error);
             bail!("Search failed on federated server: {:?}", res.error)
         }
     }
 
-    async fn get_cover_art(&self, id: &str, size: Option<u32>) -> Result<reqwest::Response> {
+    async fn get_cover_art(&self, id: &Id<'_>, size: Option<u32>) -> Result<reqwest::Response> {
         let url = self.base_url.join("/rest/getCoverArt")?;
 
-        let raw_id = self.get_raw_id(id);
-
-        let mut req = self.client.get(url).query(&self.build_auth_query()).query(&[("id", raw_id)]);
+        let mut req =
+            self.client.get(url).query(&self.build_auth_query()).query(&[("id", id.key())]);
 
         if let Some(s) = size {
             req = req.query(&[("size", s)]);
@@ -263,10 +254,11 @@ impl MusicProvider for SubsonicProvider {
     async fn stream(&self, req: &StreamMedia) -> Result<reqwest::Response> {
         let url = self.base_url.join("/rest/stream")?;
 
-        let raw_id = self.get_raw_id(&req.request.id);
-
-        let mut http_req =
-            self.client.get(url).query(&self.build_auth_query()).query(&[("id", raw_id)]);
+        let mut http_req = self
+            .client
+            .get(url)
+            .query(&self.build_auth_query())
+            .query(&[("id", req.request.id.key())]);
 
         if let Some(max_bit_rate) = req.request.max_bit_rate {
             http_req = http_req.query(&[("maxBitRate", max_bit_rate)]);
