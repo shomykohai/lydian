@@ -14,6 +14,7 @@ use axum::extract::State;
 use axum::routing::get;
 use axum::{Extension, Router};
 use reqwest::Method;
+use serde::Deserialize;
 use tower_http::cors::{Any, CorsLayer};
 use tower_real_ip::{RealIpLayer, TrustedProxyConfig};
 
@@ -26,6 +27,11 @@ pub type SubsonicExt<'sc> = Extension<Arc<SubsonicClient<'sc>>>;
 
 pub struct AppRouter {
     _state: Arc<AppState>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct Username {
+    pub u: String,
 }
 
 impl AppRouter {

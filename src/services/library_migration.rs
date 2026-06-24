@@ -10,9 +10,16 @@ use tokio::task;
 use tower::Service;
 
 use crate::AppState;
-use crate::config::{TEMPLATE_ALBUM, TEMPLATE_ARTIST, TEMPLATE_TITLE, TEMPLATE_TRACK};
+use crate::config::{
+    TEMPLATE_ALBUM,
+    TEMPLATE_ARTIST,
+    TEMPLATE_TITLE,
+    TEMPLATE_TRACK,
+    TEMPLATE_USERNAME,
+};
 use crate::models::Song;
 use crate::services::ServiceError::{self, TaggingError};
+use crate::storage::keys::StorageKey;
 
 macro_rules! update_if_none {
     ($tag:expr, $getter:ident, $setter:ident, $val:expr, $modified:expr) => {
@@ -39,6 +46,7 @@ struct SongMetadata {
 pub struct MigrationRequest<'a> {
     pub old_path: &'a str,
     pub metadata: &'a Song<'a>,
+    pub user: Option<&'a str>,
 }
 
 pub struct MigrationService {
@@ -58,11 +66,19 @@ impl<'a> Service<MigrationRequest<'a>> for MigrationService {
         let old_path = req.old_path;
         let song = req.metadata;
 
-        let mut path = format!(
-            "{}/{}",
-            self.state.config.subsonic.music_folder, self.state.config.subsonic.folder_template
-        );
-
+        let mut path = if self.state.config.subsonic.multi_user_library {
+            format!(
+                "{}/{}/{}",
+                self.state.config.subsonic.music_folder,
+                self.state.config.subsonic.multi_user_library_template,
+                self.state.config.subsonic.folder_template
+            )
+        } else {
+            format!(
+                "{}/{}",
+                self.state.config.subsonic.music_folder, self.state.config.subsonic.folder_template
+            )
+        };
         let artist = song.artist.as_deref().unwrap_or("Unknown Artist");
         let album = song.album.as_deref().unwrap_or("Unknown Album");
         let track = song.track.map(|t| t.to_string()).unwrap_or_else(|| "00".to_string());
@@ -72,6 +88,10 @@ impl<'a> Service<MigrationRequest<'a>> for MigrationService {
         path = path.replace(TEMPLATE_ALBUM, album);
         path = path.replace(TEMPLATE_TRACK, &track);
         path = path.replace(TEMPLATE_TITLE, title);
+
+        if let Some(user) = req.user {
+            path = path.replace(TEMPLATE_USERNAME, user);
+        }
 
         debug!("Migrating file from {} to {}", old_path, path);
 
@@ -110,9 +130,12 @@ impl<'a> Service<MigrationRequest<'a>> for MigrationService {
                 Some(cover_art) => {
                     let disk = &state.storage.disk;
 
+                    let key =
+                        &StorageKey::CoverArt { id: cover_art.to_string(), size: 0 }.to_file_name();
+
                     if let (Ok(mut file), Some(ext)) = (
-                        disk.get_file_by_prefix(cover_art).await,
-                        disk.get_extension_by_prefix(cover_art).await,
+                        disk.get_file_by_prefix(key).await,
+                        disk.get_extension_by_prefix(key).await,
                     ) {
                         let mut buf = Vec::new();
 
@@ -176,16 +199,17 @@ impl<'a> Service<MigrationRequest<'a>> for MigrationService {
                 }
 
                 let audio_mime = mime_type.and_then(|m| AudioMimeType::try_from(m.as_str()).ok());
+
                 if let (Some(data), Some(mime)) = (&cover_art_data, audio_mime)
                     && tag.album_cover().is_none()
                 {
                     let picture = Picture::new(data, mime);
                     tag.set_album_cover(picture);
+                    tag_modified = true;
                 }
 
                 if tag_modified {
-                    tag.write_to_path(&final_path.into_os_string().to_string_lossy())
-                        .map_err(TaggingError)?;
+                    tag.write_to_path(&final_path.into_os_string().to_string_lossy()).unwrap();
                 }
 
                 Ok::<(), ServiceError>(())

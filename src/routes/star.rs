@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use axum::Extension;
-use axum::extract::{Request, State};
+use axum::extract::{Query, Request, State};
 use axum::response::Response;
 use log::{debug, error};
 use reqwest::StatusCode;
@@ -10,7 +10,7 @@ use tower::Service;
 
 use crate::models::{AlbumWithSongsID3, Id, IdType, SubsonicErrorCode, SubsonicRespFormat};
 use crate::providers::StreamRequest;
-use crate::routes::{LydianState, SubsonicExt};
+use crate::routes::{LydianState, SubsonicExt, Username};
 use crate::services::{MigrationRequest, MigrationService, StreamMedia};
 use crate::storage::keys::StorageKey;
 
@@ -25,6 +25,7 @@ struct StarPamams<'a> {
 
 pub async fn star(
     State(state): LydianState,
+    user: Query<Username>,
     Extension(subsonic): SubsonicExt<'_>,
     format: SubsonicRespFormat,
     req: Request,
@@ -145,7 +146,7 @@ pub async fn star(
         _ => {}
     }
 
-    for (media_id, _) in &songs_to_migrate {
+    for (media_id, song) in &songs_to_migrate {
         let storage_key =
             StorageKey::Media { id: media_id.to_string(), format: state.config.download.quality };
         let file_name = storage_key.to_file_name();
@@ -164,6 +165,23 @@ pub async fn star(
                     Arc::new(tx),
                 );
                 completion_receivers.push(rx);
+            }
+
+            if let Some(cover_art) = &song.cover_art {
+                let cover_art_key = StorageKey::CoverArt { id: cover_art.to_string(), size: 0 };
+                let cover_art_file_name = cover_art_key.to_file_name();
+
+                if !state.storage.disk.exists_by_prefix(&cover_art_file_name).await
+                    && let Ok(resp) = provider.get_cover_art(cover_art, None).await
+                {
+                    let (tx, rx) = watch::channel(false);
+                    state.services.queue_download_with_completion(
+                        cover_art_file_name.clone(),
+                        resp.url(),
+                        Arc::new(tx),
+                    );
+                    completion_receivers.push(rx);
+                }
             }
         }
     }
@@ -194,7 +212,9 @@ pub async fn star(
                 continue;
             }
 
-            let migration_req = MigrationRequest { old_path: &file_name, metadata: &song };
+            let user =
+                if state.config.subsonic.multi_user_library { Some(user.u.as_str()) } else { None };
+            let migration_req = MigrationRequest { old_path: &file_name, metadata: &song, user };
             if let Err(e) = migration_service.call(migration_req).await {
                 error!("Migration failed for song {}: {}", file_name, e);
             }
