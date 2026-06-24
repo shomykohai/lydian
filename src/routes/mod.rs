@@ -15,6 +15,7 @@ use axum::routing::get;
 use axum::{Extension, Router};
 use reqwest::Method;
 use serde::Deserialize;
+use tower_http::compression::CompressionLayer;
 use tower_http::cors::{Any, CorsLayer};
 use tower_real_ip::{RealIpLayer, TrustedProxyConfig};
 
@@ -106,6 +107,7 @@ impl AppRouter {
             .layer(RealIpLayer::new(proxy_config))
             .with_state(state)
             .layer(Extension(client))
+            .layer(CompressionLayer::new())
             .layer(cors);
 
         Ok(router)
