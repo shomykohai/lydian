@@ -16,6 +16,7 @@ pub const TEMPLATE_ARTIST: &str = "{artist}";
 pub const TEMPLATE_ALBUM: &str = "{album}";
 pub const TEMPLATE_TRACK: &str = "{track}";
 pub const TEMPLATE_TITLE: &str = "{title}";
+pub const TEMPLATE_USERNAME: &str = "{username}";
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ServerConfig {
@@ -80,7 +81,7 @@ pub struct DownloadConfig {
     /// Default is 4.
     pub max_workers: usize,
     /// The quality of the downloaded files.
-    /// Defaults to "flac".
+    /// Defaults to "raw" (Original quality).
     pub quality: SubsonicStreamFormat,
 }
 
@@ -183,7 +184,7 @@ impl LydianConfig {
             .set_default("cache.cleanup_service_interval_seconds", 1800)?
             .set_default("download.download_path", "/app/downloads")?
             .set_default("download.max_workers", 4)?
-            .set_default("download.quality", "flac")?
+            .set_default("download.quality", "raw")?
             .set_default("lyrics.enable", true)?
             .set_default("lyrics.default_provider", "lrclib")?
             .set_default("lyrics.force_provider", false)?
