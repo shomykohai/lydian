@@ -27,13 +27,21 @@ pub async fn stream_media(
         return subsonic.build_error(format, SubsonicErrorCode::RequiredParameterMissing);
     };
 
-    let file_key = StorageKey::Media { id: stream_request.id.clone() }.to_file_name();
+    let file_key = StorageKey::Media {
+        id: stream_request.id.to_string(),
+        format: stream_request.format.unwrap_or_default(),
+    }
+    .to_file_name();
 
     if let Some(target_path) = state.storage.disk.resolve_path_prefix(&file_key).await {
-        return subsonic.stream_local_media(format, target_path, parts).await;
+        return subsonic
+            .stream_local_media(format, target_path, parts, Some(&stream_request))
+            .await;
     }
 
-    if let Some(proxy_response) = subsonic.try_media(format, &parts, body).await {
+    if !stream_request.id.is_external()
+        && let Some(proxy_response) = subsonic.try_media(format, &parts, body).await
+    {
         return proxy_response;
     }
 

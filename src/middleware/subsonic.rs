@@ -2,20 +2,27 @@ use std::borrow::Cow;
 use std::convert::Infallible;
 use std::io::Cursor;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::{Result, bail};
 use axum::body::Body;
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
-use axum::http::{HeaderMap, Request};
+use axum::http::{HeaderMap, HeaderValue, Request};
 use axum::response::{IntoResponse, Response as AxumResponse};
 use futures::TryStreamExt;
-use log::{debug, info};
+use log::{debug, error, info};
 use quick_xml::Writer;
 use quick_xml::events::{BytesDecl, Event};
 use rand::RngExt;
 use rand::distr::Alphanumeric;
-use reqwest::header::{ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE};
+use reqwest::header::{
+    ACCEPT_RANGES,
+    CONTENT_LENGTH,
+    CONTENT_RANGE,
+    CONTENT_TYPE,
+    X_CONTENT_TYPE_OPTIONS,
+};
 use reqwest::{Client, Method, RequestBuilder, Response, StatusCode};
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
@@ -29,7 +36,10 @@ use crate::models::{
     SubsonicErrorCode,
     SubsonicRespFormat,
     SubsonicResponse,
+    SubsonicStreamFormat,
 };
+use crate::providers::StreamRequest;
+use crate::services::{ServiceManager, TranscodeRequest};
 use crate::utils::request::json_to_xml;
 use crate::{Error, SUBSONIC_API_VERSION, VERSION};
 
@@ -56,6 +66,7 @@ pub struct SubsonicClient<'a> {
     name: Cow<'a, str>,
     version: Cow<'a, str>,
     open_subsonic: bool,
+    services: Arc<ServiceManager>,
 }
 
 impl<'a> SubsonicClient<'a> {
@@ -64,6 +75,7 @@ impl<'a> SubsonicClient<'a> {
         base_url: &str,
         username: Option<String>,
         password: Option<String>,
+        services: Arc<ServiceManager>,
     ) -> Result<Self> {
         let base_url = Url::parse(base_url)?;
 
@@ -89,6 +101,7 @@ impl<'a> SubsonicClient<'a> {
             name: "Lydian".into(),
             version: VERSION.into(),
             open_subsonic: true,
+            services,
         })
     }
 
@@ -311,17 +324,59 @@ impl<'a> SubsonicClient<'a> {
         format: SubsonicRespFormat,
         file_path: PathBuf,
         parts: Parts,
+        stream_request: Option<&StreamRequest<'a>>,
     ) -> AxumResponse {
-        debug!("Streaming local media asset via ServeFile: {}", file_path.display());
+        if let Some(req) = stream_request {
+            let is_raw = req.format.is_none() || req.format == Some(SubsonicStreamFormat::Raw);
+            let needs_transcode =
+                !is_raw && (req.format.is_some() || req.max_bit_rate.is_some_and(|b| b > 0));
+
+            if needs_transcode {
+                return self.transcode_local_media(format, file_path, req).await;
+            }
+        }
+
+        debug!("Streaming local media: {}", file_path.display());
 
         let serve_file = ServeFile::new(&file_path);
 
-        let request = Request::from_parts(parts, Body::empty());
+        let mut request = Request::from_parts(parts, Body::empty());
+        request.headers_mut().insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
 
         serve_file.oneshot(request).await.map_or_else(
             |_| self.build_error(format, SubsonicErrorCode::Generic),
             |response| response.into_response(),
         )
+    }
+
+    pub async fn transcode_local_media(
+        &self,
+        subsonic_format: SubsonicRespFormat,
+        file_path: PathBuf,
+        req: &StreamRequest<'_>,
+    ) -> AxumResponse {
+        let target_format = req.format.unwrap_or(SubsonicStreamFormat::Mp3);
+
+        let transcode_req = TranscodeRequest {
+            id: req.id.to_string(),
+            file_path,
+            format: target_format,
+            bitrate: req.max_bit_rate.unwrap_or(0),
+            offset: req.time_offset.unwrap_or(0),
+        };
+
+        match self.services.transcode.clone().oneshot(transcode_req).await {
+            Ok(body) => AxumResponse::builder()
+                .status(StatusCode::OK)
+                .header(CONTENT_TYPE, target_format.mime_type())
+                .header(X_CONTENT_TYPE_OPTIONS, "nosniff")
+                .body(body)
+                .unwrap_or_else(|_| self.build_error(subsonic_format, SubsonicErrorCode::Generic)),
+            Err(e) => {
+                error!("Transcoding stack execution error: {}", e);
+                self.build_error(subsonic_format, SubsonicErrorCode::Generic)
+            }
+        }
     }
 
     /*
@@ -352,6 +407,8 @@ impl<'a> SubsonicClient<'a> {
         if let Some(acc_ranges) = upstream_headers.get(ACCEPT_RANGES) {
             response_builder = response_builder.header(ACCEPT_RANGES, acc_ranges);
         }
+
+        response_builder = response_builder.header(X_CONTENT_TYPE_OPTIONS, "nosniff");
 
         let chunk_stream = resp.bytes_stream().map_err(|err| Error::Internal(err.to_string()));
 

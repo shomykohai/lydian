@@ -39,7 +39,6 @@ impl<'de> Deserialize<'de> for SubsonicStreamFormat {
         D: serde::Deserializer<'de>,
     {
         let s = String::deserialize(deserializer)?;
-        log::info!("Deserializing SubsonicStreamFormat from string: {}", s);
         match s.as_str() {
             "raw" => Ok(Self::Raw),
             "mp3" => Ok(Self::Mp3),

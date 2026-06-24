@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::sync::Arc;
 
 use axum::Extension;
@@ -18,8 +17,10 @@ use crate::storage::keys::StorageKey;
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StarPamams<'a> {
-    pub id: Option<&'a str>,
-    pub album_id: Option<&'a str>,
+    #[serde(borrow)]
+    pub id: Option<Id<'a>>,
+    #[serde(borrow)]
+    pub album_id: Option<Id<'a>>,
 }
 
 pub async fn star(
@@ -36,9 +37,9 @@ pub async fn star(
         return subsonic.build_error(format, SubsonicErrorCode::RequiredParameterMissing);
     };
 
-    let (tagged_id, mut target_type) = if let Some(album_id) = params.album_id {
+    let (tagged_id, mut target_type) = if let Some(ref album_id) = params.album_id {
         (album_id, IdType::Album)
-    } else if let Some(id) = params.id {
+    } else if let Some(ref id) = params.id {
         (id, IdType::Song)
     } else {
         /* Not an ID we can handle, yeet back to subsonic */
@@ -48,10 +49,7 @@ pub async fn star(
         return subsonic.build_response(format, StatusCode::OK, Some(()));
     };
 
-    let parsed_id = Id::parse(Cow::Borrowed(tagged_id));
-
     let mut active_provider = None;
-    let mut target_fetch_id = Cow::Borrowed(tagged_id);
 
     let is_migrated: bool = sqlx::query_scalar(
         r#"
@@ -61,8 +59,8 @@ pub async fn star(
         )
         "#,
     )
-    .bind(tagged_id)
-    .bind(tagged_id)
+    .bind(tagged_id.raw())
+    .bind(tagged_id.raw())
     .fetch_one(&state.storage.db)
     .await
     .unwrap_or(false);
@@ -74,7 +72,10 @@ pub async fn star(
         return subsonic.build_response(format, StatusCode::OK, Some(()));
     }
 
-    match &parsed_id {
+    let mut target_fetch_id = tagged_id;
+    let mut matched_remote_album = None;
+
+    match &tagged_id {
         Id::External { .. } => {
             active_provider = state.remotes.iter().find(|p| p.is_own_id(tagged_id));
         }
@@ -96,7 +97,7 @@ pub async fn star(
                     None,
                 )
                 .await
-                && let Some(album) = local_album.answer
+                && let Some(ref album) = local_album.answer
                 && !album.base.id.is_empty()
             {
                 target_type = IdType::Album;
@@ -106,9 +107,13 @@ pub async fn star(
                         provider.get_matching_remote_album(&album.base).await
                     {
                         active_provider = Some(provider);
-                        target_fetch_id = Cow::Owned(remote_album.base.id.to_string());
+                        matched_remote_album = Some(remote_album);
                         break;
                     }
+                }
+
+                if let Some(ref remote_album) = matched_remote_album {
+                    target_fetch_id = &remote_album.base.id;
                 }
             }
         }
@@ -121,21 +126,19 @@ pub async fn star(
         return subsonic.build_response(format, StatusCode::OK, Some(()));
     };
 
-    let raw_id = provider.get_raw_id(&target_fetch_id);
-
     let mut songs_to_migrate = Vec::new();
     let mut completion_receivers = Vec::new();
 
     match target_type {
         IdType::Song => {
-            if let Ok(song) = provider.get_song(&target_fetch_id).await {
-                songs_to_migrate.push((target_fetch_id.to_string(), song));
+            if let Ok(song) = provider.get_song(target_fetch_id).await {
+                songs_to_migrate.push((target_fetch_id.clone(), song));
             }
         }
         IdType::Album => {
-            if let Ok(album) = provider.get_album(raw_id).await {
+            if let Ok(album) = provider.get_album(target_fetch_id).await {
                 for song in album.song {
-                    songs_to_migrate.push((song.id.to_string(), song));
+                    songs_to_migrate.push((song.id.clone(), song));
                 }
             }
         }
@@ -143,7 +146,8 @@ pub async fn star(
     }
 
     for (media_id, _) in &songs_to_migrate {
-        let storage_key = StorageKey::Media { id: media_id.clone() };
+        let storage_key =
+            StorageKey::Media { id: media_id.to_string(), format: state.config.download.quality };
         let file_name = storage_key.to_file_name();
 
         if !state.storage.disk.exists_by_prefix(&file_name).await {
@@ -176,7 +180,11 @@ pub async fn star(
         /* Time to migrate!! */
         let mut migration_service = MigrationService { state: Arc::clone(&state) };
         for (media_id, song) in songs_to_migrate {
-            let file_name = StorageKey::Media { id: media_id }.to_file_name();
+            let file_name = StorageKey::Media {
+                id: media_id.to_string(),
+                format: state.config.download.quality,
+            }
+            .to_file_name();
 
             if !state.storage.disk.exists_by_prefix(&file_name).await {
                 debug!(
@@ -193,9 +201,9 @@ pub async fn star(
         }
 
         if target_type == IdType::Album {
-            let (external_id, service) = match &parsed_id {
+            let (external_id, service) = match &tagged_id {
                 Id::External { key, origin, .. } => (key.as_ref(), origin.as_ref()),
-                Id::Local { key } => (key.as_ref(), "local"),
+                Id::Local { raw } => (raw.as_ref(), "local"),
             };
 
             if let Err(e) = sqlx::query(

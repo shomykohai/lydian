@@ -2,21 +2,20 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 use super::{RemoteError, RemoteOperation};
-use crate::models::ORIGIN_SEP;
 use crate::providers::{MusicProvider, StreamRequest};
 
 #[derive(Debug)]
-pub struct StreamMedia {
-    pub request: StreamRequest,
+pub struct StreamMedia<'op> {
+    pub request: StreamRequest<'op>,
     pub range_header: Option<String>,
 }
 
 #[async_trait]
-impl RemoteOperation for StreamMedia {
+impl<'op> RemoteOperation for StreamMedia<'op> {
     type Output = reqwest::Response;
 
     fn target(&self) -> &str {
-        if let Some((prefix, _)) = self.request.id.split_once(ORIGIN_SEP) { prefix } else { "" }
+        self.request.id.service().unwrap_or("")
     }
 
     fn broadcast(&self) -> bool {

@@ -55,14 +55,12 @@ impl<'a> Service<MigrationRequest<'a>> for MigrationService {
     }
 
     fn call(&mut self, req: MigrationRequest<'a>) -> Self::Future {
-        let state = self.state.clone();
-
         let old_path = req.old_path;
         let song = req.metadata;
 
         let mut path = format!(
             "{}/{}",
-            state.config.subsonic.music_folder, state.config.subsonic.folder_template
+            self.state.config.subsonic.music_folder, self.state.config.subsonic.folder_template
         );
 
         let artist = song.artist.as_deref().unwrap_or("Unknown Artist");
@@ -77,6 +75,7 @@ impl<'a> Service<MigrationRequest<'a>> for MigrationService {
 
         debug!("Migrating file from {} to {}", old_path, path);
 
+        let state = self.state.clone();
         Box::pin(async move {
             if state.storage.disk.exists_by_prefix(&path).await {
                 return Ok(());

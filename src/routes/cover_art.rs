@@ -22,14 +22,17 @@ pub async fn get_cover_art(
         return subsonic.build_error(format, SubsonicErrorCode::RequiredParameterMissing);
     };
 
-    let file_key = StorageKey::CoverArt { id: op.id.clone(), size: op.size.unwrap_or(u32::MAX) }
-        .to_file_name();
+    let file_key =
+        StorageKey::CoverArt { id: op.id.raw().to_string(), size: op.size.unwrap_or(u32::MAX) }
+            .to_file_name();
 
     if let Some(target_path) = state.storage.disk.resolve_path_prefix(&file_key).await {
-        return subsonic.stream_local_media(format, target_path, parts).await;
+        return subsonic.stream_local_media(format, target_path, parts, None).await;
     }
 
-    if let Some(proxy_response) = subsonic.try_media(format, &parts, body).await {
+    if !op.id.is_external()
+        && let Some(proxy_response) = subsonic.try_media(format, &parts, body).await
+    {
         return proxy_response;
     }
 

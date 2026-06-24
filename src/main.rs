@@ -47,7 +47,7 @@ pub struct AppState {
     pub remotes: Vec<Arc<dyn MusicProvider>>,
     pub storage: Arc<StorageEngine>,
     pub cache: Arc<Cache<String, Value>>,
-    pub services: ServiceManager,
+    pub services: Arc<ServiceManager>,
 }
 
 impl AppState {
@@ -83,7 +83,7 @@ impl AppState {
             remotes,
             storage: Arc::new(storage_engine),
             cache,
-            services,
+            services: Arc::new(services),
         }))
     }
 
@@ -140,6 +140,8 @@ async fn main() -> Result<()> {
 
     /* Wait for database and storage operations to complete */
     state.storage.close().await?;
+
+    drop(state);
 
     info!("See ya!");
 

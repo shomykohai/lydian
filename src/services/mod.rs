@@ -2,6 +2,8 @@ mod cache;
 mod library_migration;
 mod remote;
 mod stale_migrations_cleanup;
+mod stream;
+mod transcode;
 
 use std::sync::Arc;
 
@@ -12,12 +14,17 @@ use reqwest::Client;
 use thiserror::Error as TError;
 use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinHandle;
-use tower::ServiceExt;
+use tower::limit::ConcurrencyLimit;
+use tower::{ServiceBuilder, ServiceExt};
+pub use transcode::TranscodeRequest;
 
 use crate::AppState;
 use crate::config::LydianConfig;
 use crate::services::cache::CacheCleanupService;
 use crate::services::stale_migrations_cleanup::StaleMigrationsCleanupService;
+use crate::services::stream::DiskStreamService;
+use crate::services::transcode::ffmpeg::FfmpegService;
+use crate::services::transcode::transcoding::TranscodeService;
 use crate::storage::DiskDriver;
 use crate::workers::download::{DownloadJob, DownloadManager};
 
@@ -38,18 +45,35 @@ pub enum ServiceError {
     TaskJoinError(#[from] tokio::task::JoinError),
     #[error("Database error: {0}")]
     DatabaseError(#[from] sqlx::Error),
+    #[error("Early end of stream")]
+    EarlyEndOfStream,
 }
+
+pub type Transcoder = ConcurrencyLimit<TranscodeService<DiskStreamService<FfmpegService>>>;
 
 pub struct ServiceManager {
     download_queue: Mutex<Option<mpsc::UnboundedSender<DownloadJob>>>,
     worker_tasks: Arc<Mutex<Vec<JoinHandle<()>>>>,
+    pub transcode: Transcoder,
 }
 
 impl ServiceManager {
     pub fn init(cfg: &LydianConfig, http_client: Client, disk: Arc<DiskDriver>) -> Self {
-        let (tx, handles) = DownloadManager::init(cfg, http_client, disk);
+        let (tx, handles) = DownloadManager::init(cfg, http_client, disk.clone());
 
-        Self { download_queue: Mutex::new(Some(tx)), worker_tasks: Arc::new(Mutex::new(handles)) }
+        let transcode_service = DiskStreamService::new(FfmpegService, disk.clone());
+
+        let transcode_service = TranscodeService::new(transcode_service, disk);
+
+        let transcode_service = ServiceBuilder::new()
+            .concurrency_limit(cfg.transcoding.max_concurrent_transcodes)
+            .service(transcode_service);
+
+        Self {
+            download_queue: Mutex::new(Some(tx)),
+            worker_tasks: Arc::new(Mutex::new(handles)),
+            transcode: transcode_service,
+        }
     }
 
     pub async fn start_services(&self, state: Arc<AppState>) {

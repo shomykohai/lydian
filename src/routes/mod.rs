@@ -32,12 +32,14 @@ impl AppRouter {
     /*
      * Initializes the router and sets up the necessary state
      */
+    #[allow(clippy::significant_drop_tightening)]
     pub async fn init(state: Arc<AppState>) -> Result<Router> {
         let mut subsonic_client = SubsonicClient::new(
             state.http_client.clone(),
             &state.config.subsonic.url,
             state.config.subsonic.username.clone(),
             state.config.subsonic.password.clone(),
+            state.services.clone(),
         )?;
 
         subsonic_client.init().await?;
