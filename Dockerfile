@@ -5,7 +5,7 @@ COPY . .
 RUN cargo build --release --workspace
 
 FROM alpine:3.24.1
-RUN apk add --no-cache sqlite
+RUN apk add --no-cache sqlite ffmpeg
 COPY --from=builder /usr/src/lydian/target/release/lydian /usr/local/bin/lydian
 RUN mkdir -p /app/music /app/downloads /app/data
 
