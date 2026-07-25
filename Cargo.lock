@@ -1889,6 +1889,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "is_empty"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10889632e98e3d8c1209617cf0bc8c9f40f036ee5808cd2699d2b8b77e92849e"
+dependencies = [
+ "is_empty_derive",
+]
+
+[[package]]
+name = "is_empty_derive"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d8903009eceffe882e7cb6adadd29001f4f0e46f67616247f40841a5604f1610"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
 name = "is_terminal_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2143,6 +2163,7 @@ dependencies = [
  "futures",
  "image",
  "ipnetwork",
+ "is_empty",
  "log",
  "md5",
  "mime-type",
