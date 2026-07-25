@@ -155,6 +155,11 @@ where
                 && let Some(cache_key) = op.cache_key()
                 && let Some(serialized_value) = op.serialize(&processed)
             {
+                trace!(
+                    "Caching result for operation {} with key {}",
+                    type_name::<Op>(),
+                    &*cache_key
+                );
                 cache.insert(cache_key.to_string(), serialized_value).await;
             }
 
