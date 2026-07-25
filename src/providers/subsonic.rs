@@ -185,13 +185,17 @@ impl MusicProvider for SubsonicProvider {
 
         if let Some(mut top_songs) = res.answer {
             top_songs.tag_origin(self.id(), IdType::Song);
-            top_songs.song.iter_mut().for_each(|song| {
-                song.suffix = Some(
-                    format!("{} ({})", song.suffix.clone().unwrap_or_default(), self.id()).into(),
-                );
-                song.starred = None;
-                song.played = None;
-            });
+            if let Some(songs) = top_songs.song.as_mut() {
+                songs.iter_mut().for_each(|song| {
+                    song.suffix = Some(
+                        format!("{} ({})", song.suffix.clone().unwrap_or_default(), self.id())
+                            .into(),
+                    );
+                    song.starred = None;
+                    song.played = None;
+                });
+            }
+
             Ok(top_songs)
         } else {
             bail!("Failed to fetch top songs from federated server: {:?}", res.error)
