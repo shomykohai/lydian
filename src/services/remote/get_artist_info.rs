@@ -44,7 +44,7 @@ impl<'op> RemoteOperation for GetArtistInfo<'op> {
     }
 
     fn cache_key(&self) -> Option<Cow<'_, str>> {
-        Some(Cow::Borrowed(self.id.raw()))
+        Some(format!("get_artist_info:{}", self.id.raw()).into())
     }
 
     fn deserialize(&self, value: Value) -> Option<Self::Output> {
