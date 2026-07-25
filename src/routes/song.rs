@@ -35,24 +35,21 @@ pub async fn get_top_songs(
 
     let mut service = RemoteLookupService { remotes: &state.remotes, cache: state.cache.clone() };
 
-    let mut unified_result = TopSongs { song: vec![] };
+    let mut unified_result = TopSongs { song: None };
 
     if let Ok(ref mut resp) = subsonic_resp
         && !resp.is_err()
         && let Some(ref mut answer) = resp.answer
+        && let Some(local_songs) = answer.song.take()
     {
-        unified_result.song.append(&mut answer.song);
+        unified_result.song = Some(local_songs);
     }
 
     if let Ok(remote_songs) = service.call(op).await {
         unified_result.merge(remote_songs);
     }
 
-    if unified_result.song.is_empty() {
-        subsonic.build_error(format, SubsonicErrorCode::NotFound)
-    } else {
-        subsonic.build_response(format, StatusCode::OK, Some(unified_result))
-    }
+    subsonic.build_response(format, StatusCode::OK, Some(unified_result))
 }
 
 pub async fn get_song(
