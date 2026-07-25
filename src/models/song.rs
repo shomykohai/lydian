@@ -189,17 +189,17 @@ impl<'a> TagOrigin for Song<'a> {
     }
 }
 
+#[skip_serializing_none]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TopSongs<'a> {
-    pub song: Vec<Song<'a>>,
+    #[serde(default)]
+    pub song: Option<Vec<Song<'a>>>,
 }
 
 impl<'a> TagOrigin for TopSongs<'a> {
     fn tag_origin(&mut self, origin: &str, _id_type: IdType) {
-        for song in &mut self.song {
-            song.tag_origin(origin, IdType::Song);
-        }
+        self.song.tag_origin(origin, IdType::Song);
     }
 }
 
@@ -211,10 +211,14 @@ impl Mergeable for TopSongs<'_> {
     type Item = Self;
 
     fn merge(&mut self, other: Self) {
-        for song in other.song {
-            if !self.song.iter().any(|s| s.is_similar_to(&song)) {
-                self.song.push(song);
+        match (&mut self.song, other.song) {
+            (Some(self_songs), Some(other_songs)) => {
+                self_songs.merge(other_songs);
             }
+            (self_songs @ None, Some(other_songs)) => {
+                *self_songs = Some(other_songs);
+            }
+            _ => {}
         }
     }
 }
