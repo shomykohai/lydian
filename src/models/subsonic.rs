@@ -39,7 +39,10 @@ impl<'de> Deserialize<'de> for SubsonicStreamFormat {
         D: serde::Deserializer<'de>,
     {
         let s = String::deserialize(deserializer)?;
-        match s.as_str() {
+
+        let base_format = s.split([' ', '+', '(']).next().unwrap_or(&s).trim().to_lowercase();
+
+        match base_format.as_str() {
             "raw" => Ok(Self::Raw),
             "mp3" => Ok(Self::Mp3),
             "opus" | "ogg" => Ok(Self::Ogg),
