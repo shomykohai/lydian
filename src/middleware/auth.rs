@@ -1,11 +1,13 @@
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use axum::extract::Request;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use futures::future::BoxFuture;
 use log::{error, trace};
+use moka::future::Cache;
 use tower::{Layer, Service};
 
 use crate::AppState;
@@ -14,11 +16,18 @@ use crate::models::SubsonicResponse;
 #[derive(Clone)]
 pub struct AuthMiddlewareLayer {
     state: Arc<AppState>,
+    cache: Cache<String, ()>,
 }
 
 impl AuthMiddlewareLayer {
-    pub const fn new(state: Arc<AppState>) -> Self {
-        Self { state }
+    pub fn new(state: Arc<AppState>) -> Self {
+        Self {
+            state,
+            cache: Cache::builder()
+                .max_capacity(1000)
+                .time_to_live(Duration::from_secs(600))
+                .build(),
+        }
     }
 }
 
@@ -26,7 +35,7 @@ impl<S> Layer<S> for AuthMiddlewareLayer {
     type Service = AuthMiddleware<S>;
 
     fn layer(&self, inner: S) -> Self::Service {
-        AuthMiddleware { inner, state: self.state.clone() }
+        AuthMiddleware { inner, state: self.state.clone(), cache: self.cache.clone() }
     }
 }
 
@@ -34,6 +43,7 @@ impl<S> Layer<S> for AuthMiddlewareLayer {
 pub struct AuthMiddleware<S> {
     inner: S,
     state: Arc<AppState>,
+    cache: Cache<String, ()>,
 }
 
 impl<S> Service<Request> for AuthMiddleware<S>
@@ -54,6 +64,7 @@ where
         let clone = self.inner.clone();
         let mut inner = std::mem::replace(&mut self.inner, clone);
         let state = self.state.clone();
+        let cache = self.cache.clone();
 
         Box::pin(async move {
             let query_str = req.uri().query().unwrap_or("");
@@ -79,6 +90,10 @@ where
                 .map(|(k, v)| format!("{}={}", k, v))
                 .collect::<Vec<String>>()
                 .join("&");
+
+            if cache.contains_key(&new_query) {
+                return inner.call(req).await;
+            }
 
             let upstream_url = format!(
                 "{}/rest/ping.view?{}&f=json",
@@ -106,6 +121,8 @@ where
                         return Ok((StatusCode::UNAUTHORIZED, "Invalid Subsonic credentials")
                             .into_response());
                     }
+
+                    cache.insert(new_query, ()).await;
 
                     inner.call(req).await
                 }
