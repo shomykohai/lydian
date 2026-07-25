@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use is_empty::IsEmpty;
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 
@@ -16,7 +17,7 @@ use crate::models::{
 use crate::utils;
 
 #[skip_serializing_none]
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ArtistID3<'a> {
     pub id: Id<'a>,
@@ -71,7 +72,7 @@ impl Mergeable for ArtistID3<'_> {
  * `getArtist` response, while `ArtistID3` is used for
  * a list of artists (like in search3)
  */
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ArtistWithAlbumsID3<'a> {
     #[serde(flatten)]
@@ -116,7 +117,7 @@ impl<'a> TagOrigin for ArtistWithAlbumsID3<'a> {
 }
 
 #[skip_serializing_none]
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Default, IsEmpty)]
 #[serde(rename_all = "camelCase")]
 pub struct ArtistInfo<'a> {
     pub biography: OptCowStr<'a>,
@@ -170,8 +171,14 @@ impl Mergeable for ArtistInfo<'_> {
             self.large_image_url = other.large_image_url;
         }
 
-        if self.similar_artist.is_none() {
-            self.similar_artist = other.similar_artist;
+        match (&mut self.similar_artist, other.similar_artist) {
+            (Some(self_list), Some(other_list)) => {
+                self_list.merge(other_list);
+            }
+            (None, Some(other_list)) => {
+                self.similar_artist = Some(other_list);
+            }
+            _ => {}
         }
     }
 }
