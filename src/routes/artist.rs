@@ -77,17 +77,64 @@ pub async fn get_artist(
         return subsonic.build_error(format, SubsonicErrorCode::RequiredParameterMissing);
     };
 
-    if !op.id.is_external()
-        && let Some(final_response) =
-            subsonic.try_req::<ArtistWithAlbumsID3>(format, &parts, body).await
-    {
-        return final_response;
-    }
-
     let mut service = RemoteLookupService { remotes: &state.remotes, cache: state.cache.clone() };
 
-    service.call(op).await.map_or_else(
-        |_| subsonic.build_error(format, SubsonicErrorCode::NotFound),
-        |artist| subsonic.build_response(format, StatusCode::OK, Some(artist)),
-    )
+    let mut subsonic_resp = if !op.id.is_external() {
+        Some(
+            subsonic
+                .request::<ArtistWithAlbumsID3<'_>>(
+                    parts.method.clone(),
+                    parts.uri.path(),
+                    parts.uri.query(),
+                    parts.headers.clone(),
+                    Some(body),
+                )
+                .await,
+        )
+    } else {
+        None
+    };
+
+    let mut unified_result = if let Some(Ok(ref mut resp)) = subsonic_resp
+        && !resp.is_err()
+        && let Some(ref mut answer) = resp.answer
+    {
+        std::mem::take(answer)
+    } else {
+        ArtistWithAlbumsID3::default()
+    };
+
+    if let Ok(mut remote_artist) = service.call(op).await {
+        if !unified_result.base.id.is_empty()
+            && let Some(ref mut remote_albums) = remote_artist.album
+        {
+            for album in remote_albums {
+                album.artist_id = Some(unified_result.base.id.clone());
+                if let Some(ref mut artists) = album.artists {
+                    // TODO: Link other local artists too if they exist
+                    for a in artists {
+                        if a.is_similar_to(&unified_result.base) {
+                            a.id = unified_result.base.id.clone();
+                        }
+                    }
+                }
+            }
+        }
+
+        if !unified_result.base.id.is_empty() {
+            unified_result.merge(remote_artist);
+        } else {
+            unified_result = remote_artist;
+        }
+    }
+
+    if let Some(ref albums) = unified_result.album {
+        unified_result.base.album_count = Some(albums.len() as u32);
+    }
+
+    if unified_result.base.id.is_empty() {
+        subsonic.build_error(format, SubsonicErrorCode::NotFound)
+    } else {
+        subsonic.build_response(format, StatusCode::OK, Some(unified_result))
+    }
 }
