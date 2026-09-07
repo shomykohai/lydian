@@ -16,6 +16,7 @@ use crate::models::{
     Id,
     IdType,
     Mergeable,
+    SEARCH_LIMIT,
     SearchResult,
     Song,
     SubsonicStreamFormat,
@@ -84,6 +85,14 @@ pub struct SearchRequest<'a> {
     pub song_offset: Option<u32>,
 }
 
+impl SearchRequest<'_> {
+    pub fn fill_counts(&mut self) {
+        self.artist_count.get_or_insert(SEARCH_LIMIT);
+        self.album_count.get_or_insert(SEARCH_LIMIT);
+        self.song_count.get_or_insert(SEARCH_LIMIT);
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct StreamRequest<'a> {
@@ -106,6 +115,11 @@ pub trait MusicProvider: Send + Sync {
 
     fn is_own_id(&self, id: &Id<'_>) -> bool {
         id.service().is_some_and(|service| service == self.id())
+    }
+
+    /* Like "flac (Subsonic)" */
+    fn tagged_suffix(&self, container: &str) -> String {
+        format!("{container} ({})", self.id())
     }
 
     async fn get_artist<'a>(&self, id: &Id<'_>) -> Result<ArtistWithAlbumsID3<'a>>;

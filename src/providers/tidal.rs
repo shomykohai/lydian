@@ -36,6 +36,7 @@ use crate::models::{
     ArtistWithAlbumsID3,
     Id,
     IdType,
+    Inherit,
     ItemDate,
     SearchResult,
     Song,
@@ -929,7 +930,7 @@ impl TidalProvider {
         let token = CachedToken::new(&grant.access_token, grant.expires_in);
         let value = token.value.clone();
 
-        debug!("Minted an app token for [{}], valid for {}s", self.name, grant.expires_in);
+        debug!("Got a new app token for [{}], valid for {}s", self.name, grant.expires_in);
 
         *self.token.write().await = Some(token);
 
@@ -1047,7 +1048,7 @@ impl TidalProvider {
         let mut song = Song::try_from(track).ok()?;
         let quality = self.quality_for(None);
 
-        song.suffix = Some(quality.suffix().into());
+        song.suffix = Some(self.tagged_suffix(quality.suffix()).into());
         song.content_type = Some(quality.content_type().into());
         song.bit_rate = Some(quality.bitrate_kbps());
         song.sampling_rate = Some(quality.sampling_rate());
@@ -1056,6 +1057,17 @@ impl TidalProvider {
         song.size = song.duration.and_then(|secs| quality.estimated_size(secs));
 
         Some(self.tagged(song, IdType::Song))
+    }
+
+    async fn album_of(&self, song: &Song<'_>) -> Option<AlbumID3<'static>> {
+        if song.year.is_some() {
+            return None;
+        }
+
+        let key = song.album_id.as_ref().map(Id::key).filter(|key| !key.is_empty())?;
+        let album = self.get::<TidalAlbum>(&format!("/v1/albums/{key}"), &[]).await.ok()?;
+
+        self.map_albums([album]).into_iter().next()
     }
 
     fn map_songs<I: IntoIterator<Item = TidalTrack>>(&self, tracks: I) -> Vec<Song<'static>> {
@@ -1332,13 +1344,21 @@ impl MusicProvider for TidalProvider {
             .filter(|entry| entry.kind.eq_ignore_ascii_case("track"))
             .map(|entry| entry.item);
 
-        Ok(AlbumWithSongsID3 { base, song: self.map_songs(tracks) })
+        let mut album = AlbumWithSongsID3 { base, song: self.map_songs(tracks) };
+        album.song.inherit(&album.base);
+
+        Ok(album)
     }
 
     async fn get_song<'a>(&self, id: &Id<'_>) -> Result<Song<'a>> {
         let track = self.get::<TidalTrack>(&format!("/v1/tracks/{}", id.key()), &[]).await?;
+        let mut song = self.map_song(track).ok_or(RemoteError::EmptyDataset)?;
 
-        self.map_song(track).ok_or_else(|| RemoteError::EmptyDataset.into())
+        if let Some(album) = self.album_of(&song).await {
+            song.inherit(&album);
+        }
+
+        Ok(song)
     }
 
     async fn get_top_songs<'a>(&self, artist: &str, count: Option<u32>) -> Result<TopSongs<'a>> {

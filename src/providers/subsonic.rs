@@ -141,7 +141,7 @@ impl MusicProvider for SubsonicProvider {
         album.base.played = None;
         album.song.iter_mut().for_each(|song| {
             song.suffix =
-                Some(format!("{} ({})", song.suffix.clone().unwrap_or_default(), self.id()).into());
+                Some(self.tagged_suffix(song.suffix.as_deref().unwrap_or_default()).into());
             song.starred = None;
             song.played = None;
         });
@@ -161,8 +161,7 @@ impl MusicProvider for SubsonicProvider {
         song.tag_origin(self.id(), IdType::Song);
         song.starred = None;
         song.played = None;
-        song.suffix =
-            Some(format!("{} ({})", song.suffix.clone().unwrap_or_default(), self.id()).into());
+        song.suffix = Some(self.tagged_suffix(song.suffix.as_deref().unwrap_or_default()).into());
 
         Ok(song)
     }
@@ -183,9 +182,8 @@ impl MusicProvider for SubsonicProvider {
         top_songs.tag_origin(self.id(), IdType::Song);
         if let Some(songs) = top_songs.song.as_mut() {
             songs.iter_mut().for_each(|song| {
-                song.suffix = Some(
-                    format!("{} ({})", song.suffix.clone().unwrap_or_default(), self.id()).into(),
-                );
+                song.suffix =
+                    Some(self.tagged_suffix(song.suffix.as_deref().unwrap_or_default()).into());
                 song.starred = None;
                 song.played = None;
             });
