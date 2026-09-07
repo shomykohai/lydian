@@ -2,9 +2,10 @@ use std::borrow::Cow;
 
 use anyhow::Result;
 use async_trait::async_trait;
-//use axum::body::Bytes;
-//use futures::stream::BoxStream;
+use futures::StreamExt;
+use futures::stream::FuturesUnordered;
 use serde::{Deserialize, Serialize};
+use thiserror::Error as TError;
 
 use crate::models::{
     AlbumID3,
@@ -12,24 +13,74 @@ use crate::models::{
     AlbumWithSongsID3,
     ArtistInfo,
     ArtistWithAlbumsID3,
-    FuzzyMatch,
     Id,
-    ORIGIN_SEP,
+    IdType,
+    Mergeable,
     SearchResult,
     Song,
     SubsonicStreamFormat,
     TopSongs,
+    empty_as_none,
 };
 use crate::services::StreamMedia;
+use crate::utils::metadata::{compare_artists, compare_titles};
+use crate::utils::string::normalize;
+use crate::workers::download::DownloadSource;
+
+const ALBUM_LOOKUP_LIMIT: usize = 10;
+const ARTIST_LOOKUP_LIMIT: usize = 5;
+
+#[derive(TError, Debug)]
+pub enum ProviderError {
+    #[error("Missing id for {}", .0.as_str())]
+    MissingId(IdType),
+    #[error("Missing name for {}", .0.as_str())]
+    MissingName(IdType),
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ArtistRef {
+    pub name: String,
+    pub albums: Vec<String>,
+}
+
+impl ArtistRef {
+    pub fn of(artist: &ArtistWithAlbumsID3<'_>) -> Self {
+        Self {
+            name: artist.base.name.to_string(),
+            albums: artist.album.iter().flatten().map(|album| album.name.to_string()).collect(),
+        }
+    }
+
+    /// How many of these albums the candidate also has.
+    fn overlap(&self, candidate: &ArtistWithAlbumsID3<'_>) -> usize {
+        let Some(theirs) = candidate.album.as_ref() else {
+            return 0;
+        };
+
+        self.albums
+            .iter()
+            .filter(|mine| theirs.iter().any(|other| compare_titles(mine, &other.name)))
+            .count()
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SearchRequest<'a> {
+    #[serde(default)]
     pub query: Cow<'a, str>,
+    #[serde(default, deserialize_with = "empty_as_none")]
     pub artist_count: Option<u32>,
+    #[serde(default, deserialize_with = "empty_as_none")]
     pub artist_offset: Option<u32>,
+    #[serde(default, deserialize_with = "empty_as_none")]
     pub album_count: Option<u32>,
+    #[serde(default, deserialize_with = "empty_as_none")]
     pub album_offset: Option<u32>,
+    #[serde(default, deserialize_with = "empty_as_none")]
     pub song_count: Option<u32>,
+    #[serde(default, deserialize_with = "empty_as_none")]
     pub song_offset: Option<u32>,
 }
 
@@ -37,25 +88,21 @@ pub struct SearchRequest<'a> {
 #[serde(rename_all = "camelCase")]
 pub struct StreamRequest<'a> {
     pub id: Id<'a>,
+    #[serde(default, deserialize_with = "empty_as_none")]
     pub max_bit_rate: Option<u32>,
     pub format: Option<SubsonicStreamFormat>,
+    #[serde(default, deserialize_with = "empty_as_none")]
     pub time_offset: Option<u32>,
     pub size: Option<String>,
+    #[serde(default, deserialize_with = "empty_as_none")]
     pub estimate_content_length: Option<bool>,
+    #[serde(default, deserialize_with = "empty_as_none")]
     pub converted: Option<bool>,
 }
 
 #[async_trait]
 pub trait MusicProvider: Send + Sync {
     fn id(&self) -> &str;
-
-    /* Removes the self.id___type__ prefix */
-    fn get_raw_id<'a>(&self, id: &'a str) -> &'a str {
-        id.rmatch_indices(ORIGIN_SEP)
-            .next()
-            .map(|(i, _)| i)
-            .map_or(id, |idx| &id[idx + ORIGIN_SEP.len()..])
-    }
 
     fn is_own_id(&self, id: &Id<'_>) -> bool {
         id.service().is_some_and(|service| service == self.id())
@@ -75,12 +122,75 @@ pub trait MusicProvider: Send + Sync {
 
     /* Helpers that are not mapped to subsonic, but we need it for making our life easier */
 
+    async fn download_source(&self, id: &Id<'_>) -> Option<DownloadSource> {
+        let probe = StreamMedia {
+            request: StreamRequest { id: id.clone(), ..Default::default() },
+            range_header: Some("bytes=0-9".to_string()),
+        };
+
+        DownloadSource::from_response(&self.stream(&probe).await.ok()?)
+    }
+
+    /* Find an artist matching against a reference */
+    async fn find_artist<'a>(&self, reference: &ArtistRef) -> Option<ArtistWithAlbumsID3<'a>> {
+        if reference.name.trim().is_empty() {
+            return None;
+        }
+
+        let search = SearchRequest {
+            query: Cow::Borrowed(&reference.name),
+            artist_count: Some(ARTIST_LOOKUP_LIMIT as u32),
+            artist_offset: None,
+            album_count: Some(0),
+            album_offset: None,
+            song_count: Some(0),
+            song_offset: None,
+        };
+
+        let found = self.search(&search).await.ok()?;
+        let wanted = normalize(reference.name.trim());
+
+        let mut lookups: FuturesUnordered<_> = found
+            .artist
+            .iter()
+            .filter(|candidate| {
+                if reference.albums.is_empty() {
+                    normalize(candidate.name.trim()) == wanted
+                } else {
+                    compare_artists(Some(&candidate.name), Some(&reference.name))
+                }
+            })
+            .take(ARTIST_LOOKUP_LIMIT)
+            .map(|candidate| self.get_artist(&candidate.id))
+            .collect();
+
+        let mut best: Option<(usize, ArtistWithAlbumsID3<'a>)> = None;
+
+        while let Some(result) = lookups.next().await {
+            let Ok(candidate) = result else {
+                continue;
+            };
+
+            let shared = reference.overlap(&candidate);
+
+            if shared == 0 && !reference.albums.is_empty() {
+                continue;
+            }
+
+            if best.as_ref().is_none_or(|(most, _)| shared > *most) {
+                best = Some((shared, candidate));
+            }
+        }
+
+        best.map(|(_, artist)| artist)
+    }
+
     async fn get_albums_by_name<'a>(&self, name: &str) -> Vec<AlbumWithSongsID3<'a>> {
         let search_req = SearchRequest {
             query: Cow::Borrowed(name),
             artist_count: Some(0),
             artist_offset: None,
-            album_count: Some(10),
+            album_count: Some(ALBUM_LOOKUP_LIMIT as u32),
             album_offset: None,
             song_count: Some(0),
             song_offset: None,
@@ -90,10 +200,17 @@ pub trait MusicProvider: Send + Sync {
             return vec![];
         };
 
-        let mut albums = Vec::with_capacity(10);
+        let mut lookups: FuturesUnordered<_> = search_result
+            .album
+            .iter()
+            .take(ALBUM_LOOKUP_LIMIT)
+            .map(|album| self.get_album(&album.id))
+            .collect();
 
-        for album in &search_result.album {
-            if let Ok(album) = self.get_album(&album.id).await {
+        let mut albums = Vec::with_capacity(lookups.len());
+
+        while let Some(result) = lookups.next().await {
+            if let Ok(album) = result {
                 albums.push(album);
             }
         }
@@ -108,7 +225,7 @@ pub trait MusicProvider: Send + Sync {
         let albums = self.get_albums_by_name(&album.name).await;
 
         for remote_album in albums {
-            if album.is_similar_to(&remote_album.base) {
+            if album.matches(&remote_album.base) {
                 return Some(remote_album);
             }
         }
