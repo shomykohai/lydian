@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::logger;
 use crate::models::SubsonicStreamFormat;
-use crate::providers::{MusicProvider, QobuzDlClient, SubsonicProvider};
+use crate::providers::{MusicProvider, QobuzDlClient, SubsonicProvider, TidalProvider};
 
 pub const TEMPLATE_ARTIST: &str = "{artist}";
 pub const TEMPLATE_ALBUM: &str = "{album}";
@@ -139,6 +139,23 @@ pub struct QobuzDlProviderConfig {
     pub url: String,
 }
 
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+pub struct TidalProviderConfig {
+    /// A hifi-api instance
+    pub stream_api: String,
+    /// `HI_RES`, `LOSSLESS` (FLAC), `HIGH` or `LOW`. Caps what a client's
+    /// requested format may be sourced from; unset means CD-quality lossless.
+    pub quality: Option<String>,
+    /// URL of TIDAL api, used for fetching metadata. If unset, defaults to `https://api.tidal.com`
+    pub url: Option<String>,
+    /// Country code for TIDAL's API. If unset, defaults to `US`.
+    pub country: Option<String>,
+    /// Client ID for TIDAL's API. If unset, the default browser client ID is used.
+    pub client_id: Option<String>,
+    /// Client secret for TIDAL's API. If unset, the default browser client secret is used.
+    pub client_secret: Option<String>,
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ProvidersConfig {
     #[serde(default)]
@@ -146,6 +163,9 @@ pub struct ProvidersConfig {
 
     #[serde(default)]
     pub qobuz: HashMap<String, QobuzDlProviderConfig>,
+
+    #[serde(default)]
+    pub tidal: HashMap<String, TidalProviderConfig>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
