@@ -223,10 +223,10 @@ impl<'a> Service<MigrationRequest<'a>> for MigrationService {
                 return Err(migration_failed(anyhow!(std::io::ErrorKind::NotFound)));
             };
 
-            let destination = match staged.extension() {
-                Some(extension) => format!("{path}.{}", extension.to_string_lossy()),
-                None => path.clone(),
-            };
+            let destination = staged.extension().map_or_else(
+                || path.clone(),
+                |extension| format!("{path}.{}", extension.to_string_lossy()),
+            );
 
             if tokio::fs::try_exists(&destination).await.unwrap_or(false) {
                 return Ok(());
