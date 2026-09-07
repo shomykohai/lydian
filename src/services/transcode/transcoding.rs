@@ -53,11 +53,12 @@ where
             };
 
             if disk.has_key(&cache_key).await {
-                let file = disk.read_stream_by_prefix(&cache_key.to_file_name()).await?;
+                let file = disk.read_stream(&cache_key.to_file_name()).await?;
                 return Ok(Body::from_stream(file.stream));
             }
 
-            let stream_req = DiskStreamRequest { inner_req: req, cache_key: cache_key.clone() };
+            let stream_req =
+                DiskStreamRequest { inner_req: req, cache_name: cache_key.to_file_name() };
 
             inner.call(stream_req).await
         })
