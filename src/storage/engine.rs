@@ -47,7 +47,12 @@ impl StorageEngine {
             .journal_mode(SqliteJournalMode::Wal)
             .synchronous(SqliteSynchronous::Normal);
 
-        let db = SqlitePoolOptions::new().max_connections(10).connect_with(db_opt).await?;
+        let db = SqlitePoolOptions::new()
+            .max_connections(10)
+            .min_connections(4)
+            .test_before_acquire(false)
+            .connect_with(db_opt)
+            .await?;
 
         info!("Running database migrations...");
         sqlx::migrate!("./migrations").run(&db).await?;
