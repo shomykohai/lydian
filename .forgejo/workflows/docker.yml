@@ -11,7 +11,30 @@ on:
       - completed
 
 jobs:
+  clippy:
+      runs-on: ubuntu-latest
+      steps:
+        - uses: https://github.com/actions/checkout@v7
+        - uses: https://github.com/dtolnay/rust-toolchain@nightly
+          with:
+            components: clippy
+        - uses: https://github.com/Swatinem/rust-cache@v2
+        - name: Run Clippy
+          run: cargo clippy --all-targets -- -D warnings -W clippy::nursery
+
+  rustfmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: https://github.com/actions/checkout@v7
+      - uses: https://github.com/dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
+      - name: Check Formatting
+        run: cargo fmt --check
+
   build:
+    needs: [clippy, rustfmt]
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     container:
       image: catthehacker/ubuntu:act-latest
