@@ -57,6 +57,7 @@ impl AppState {
             .user_agent(format!("Lydian/{}", VERSION))
             .tcp_nodelay(true)
             .connect_timeout(Duration::from_secs(10))
+            .read_timeout(Duration::from_secs(30))
             .pool_idle_timeout(Duration::from_secs(90))
             .tcp_keepalive(Some(Duration::from_secs(60)))
             .http2_keep_alive_interval(Some(Duration::from_secs(30)))
