@@ -32,6 +32,7 @@ use crate::providers::MusicProvider;
 use crate::routes::AppRouter;
 use crate::services::ServiceManager;
 use crate::storage::engine::StorageEngine;
+use crate::workers::download::DownloadSource;
 
 #[cfg(feature = "jemalloc")]
 #[global_allocator]
@@ -46,7 +47,7 @@ pub struct AppState {
     pub http_client: reqwest::Client,
     pub remotes: Vec<Arc<dyn MusicProvider>>,
     pub storage: Arc<StorageEngine>,
-    pub cache: Arc<Cache<String, Value>>,
+    pub cache: Arc<Cache<String, Arc<Value>>>,
     pub services: Arc<ServiceManager>,
 }
 
@@ -75,7 +76,7 @@ impl AppState {
         let services =
             ServiceManager::init(&config, http_client.clone(), storage_engine.disk.clone());
 
-        let remotes = config.providers.build(&http_client)?;
+        let remotes = config.providers.build(&http_client, config.download.quality)?;
 
         Ok(Arc::new(Self {
             config,
@@ -87,12 +88,8 @@ impl AppState {
         }))
     }
 
-    pub fn get_remote_by_id(&self, id: &str) -> Option<Arc<dyn MusicProvider>> {
-        self.remotes.iter().find(|r| r.id() == id).cloned()
-    }
-
-    pub fn queue_download(&self, file_key: String, source_url: impl ToString) {
-        self.services.queue_download(file_key, source_url);
+    pub fn queue_download(&self, file_key: String, source: DownloadSource) {
+        self.services.queue_download(file_key, source);
     }
 }
 

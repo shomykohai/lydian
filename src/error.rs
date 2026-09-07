@@ -17,4 +17,3 @@ pub enum Error {
     #[error("Internal error: {0}")]
     Internal(String),
 }
-
