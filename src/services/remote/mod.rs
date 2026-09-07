@@ -199,7 +199,8 @@ where
 
             debug!("Remote operation {operation} completed in {:.2?}", start_time.elapsed());
 
-            if op.cache()
+            if !unanswered
+                && op.cache()
                 && let Some(cache_key) = op.cache_key()
                 && let Some(serialized_value) = op.serialize(&processed)
             {

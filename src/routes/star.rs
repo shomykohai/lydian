@@ -78,6 +78,7 @@ pub async fn star(
 
     match &tagged_id {
         Id::External { .. } => {
+            target_type = tagged_id.id_type();
             active_provider = state.remotes.iter().find(|p| p.is_own_id(tagged_id));
         }
         Id::Local { .. } => {
@@ -131,19 +132,19 @@ pub async fn star(
     let mut completion_receivers = Vec::new();
 
     match target_type {
-        IdType::Song => {
-            if let Ok(song) = provider.get_song(target_fetch_id).await {
-                songs_to_migrate.push((target_fetch_id.clone(), song));
-            }
-        }
-        IdType::Album => {
-            if let Ok(album) = provider.get_album(target_fetch_id).await {
+        IdType::Song => match provider.get_song(target_fetch_id).await {
+            Ok(song) => songs_to_migrate.push((target_fetch_id.clone(), song)),
+            Err(err) => error!("Cannot star song {target_fetch_id}: {err}"),
+        },
+        IdType::Album => match provider.get_album(target_fetch_id).await {
+            Ok(album) => {
                 for song in album.song {
                     songs_to_migrate.push((song.id.clone(), song));
                 }
             }
-        }
-        _ => {}
+            Err(err) => error!("Cannot star album {target_fetch_id}: {err}"),
+        },
+        other => debug!("Starring {} is not supported", other.as_str()),
     }
 
     for (media_id, song) in &songs_to_migrate {
@@ -151,33 +152,29 @@ pub async fn star(
             StorageKey::Media { id: media_id.to_string(), format: state.config.download.quality };
         let file_name = storage_key.to_file_name();
 
-        if !state.storage.disk.exists_by_prefix(&file_name).await {
-            if let Some(source) = provider.download_source(media_id).await {
+        if !state.storage.disk.exists_by_prefix(&file_name).await
+            && let Some(source) = provider.download_source(media_id).await
+        {
+            let (tx, rx) = watch::channel(false);
+            state.services.queue_download_with_completion(file_name.clone(), source, Arc::new(tx));
+            completion_receivers.push(rx);
+        }
+
+        if let Some(cover_art) = &song.cover_art {
+            let cover_art_key = StorageKey::CoverArt { id: cover_art.to_string(), size: None };
+            let cover_art_file_name = cover_art_key.to_file_name();
+
+            if !state.storage.disk.exists_by_prefix(&cover_art_file_name).await
+                && let Ok(resp) = provider.get_cover_art(cover_art, None).await
+                && let Some(source) = DownloadSource::from_response(&resp)
+            {
                 let (tx, rx) = watch::channel(false);
                 state.services.queue_download_with_completion(
-                    file_name.clone(),
+                    cover_art_file_name.clone(),
                     source,
                     Arc::new(tx),
                 );
                 completion_receivers.push(rx);
-            }
-
-            if let Some(cover_art) = &song.cover_art {
-                let cover_art_key = StorageKey::CoverArt { id: cover_art.to_string(), size: None };
-                let cover_art_file_name = cover_art_key.to_file_name();
-
-                if !state.storage.disk.exists_by_prefix(&cover_art_file_name).await
-                    && let Ok(resp) = provider.get_cover_art(cover_art, None).await
-                    && let Some(source) = DownloadSource::from_response(&resp)
-                {
-                    let (tx, rx) = watch::channel(false);
-                    state.services.queue_download_with_completion(
-                        cover_art_file_name.clone(),
-                        source,
-                        Arc::new(tx),
-                    );
-                    completion_receivers.push(rx);
-                }
             }
         }
     }
@@ -217,10 +214,7 @@ pub async fn star(
         }
 
         if target_type == IdType::Album {
-            let (external_id, service) = match &tagged_id {
-                Id::External { key, origin, .. } => (key.as_ref(), origin.as_ref()),
-                Id::Local { raw } => (raw.as_ref(), "local"),
-            };
+            let (external_id, service) = (tagged_id.raw(), tagged_id.service().unwrap_or("local"));
 
             if let Err(e) = sqlx::query(
                 r#"
