@@ -13,6 +13,8 @@ use crate::models::{ArtistInfo, Id, Mergeable};
 pub struct GetArtistInfo<'op> {
     #[serde(borrow)]
     pub id: Id<'op>,
+    #[serde(default, deserialize_with = "crate::models::empty_as_none")]
+    pub count: Option<u32>,
 }
 
 #[async_trait]
@@ -47,8 +49,8 @@ impl<'op> RemoteOperation for GetArtistInfo<'op> {
         Some(format!("get_artist_info:{}", self.id.raw()).into())
     }
 
-    fn deserialize(&self, value: Value) -> Option<Self::Output> {
-        serde_json::from_value(value).ok()
+    fn deserialize(&self, value: &Value) -> Option<Self::Output> {
+        Self::Output::deserialize(value).ok()
     }
 
     fn serialize(&self, output: &Self::Output) -> Option<Value> {

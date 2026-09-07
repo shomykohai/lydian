@@ -13,7 +13,7 @@ use std::any::type_name;
 use std::borrow::Cow;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -37,7 +37,10 @@ pub use stream::*;
 use thiserror::Error as TError;
 use tower::Service;
 
+use crate::models::SubsonicErrorCode;
 use crate::providers::MusicProvider;
+
+const PROVIDER_TIMEOUT: Duration = Duration::from_secs(8);
 
 #[derive(TError, Debug)]
 pub enum RemoteError {
@@ -47,6 +50,8 @@ pub enum RemoteError {
     ProcessingError,
     #[error("Remote dataset is empty")]
     EmptyDataset,
+    #[error("Operation is not supported by provider `{0}`")]
+    Unsupported(&'static str),
 }
 
 #[async_trait]
@@ -82,7 +87,8 @@ pub trait RemoteOperation: Send + Sync {
         None
     }
 
-    fn deserialize(&self, _value: Value) -> Option<Self::Output> {
+    /// If cache is supported, returns a deserialized value from the cached JSON value.
+    fn deserialize(&self, _value: &Value) -> Option<Self::Output> {
         None
     }
 
@@ -92,9 +98,21 @@ pub trait RemoteOperation: Send + Sync {
     }
 }
 
+fn is_missing(error: &anyhow::Error) -> bool {
+    if let Some(error) = error.downcast_ref::<RemoteError>() {
+        return match error {
+            RemoteError::EmptyDataset | RemoteError::Unsupported(_) => true,
+            RemoteError::Status(status) => status.is_client_error(),
+            RemoteError::ProcessingError => false,
+        };
+    }
+
+    matches!(error.downcast_ref::<SubsonicErrorCode>(), Some(SubsonicErrorCode::NotFound))
+}
+
 pub struct RemoteLookupService<'a> {
     pub remotes: &'a [Arc<dyn MusicProvider>],
-    pub cache: Arc<Cache<String, Value>>,
+    pub cache: Arc<Cache<String, Arc<Value>>>,
 }
 
 impl<'a, Op> Service<Op> for RemoteLookupService<'a>
@@ -115,15 +133,21 @@ where
 
         let op = Arc::new(op);
         Box::pin(async move {
+            let operation = type_name::<Op>();
             let target_source = op.target();
 
             if op.cache()
                 && let Some(cache_key) = op.cache_key()
                 && let Some(cached_json) = cache.get(&*cache_key).await
-                && let Some(deserialized) = op.deserialize(cached_json)
             {
-                trace!("Cache hit for operation {} with key {}", type_name::<Op>(), &*cache_key);
-                return Ok(deserialized);
+                if cached_json.is_null() {
+                    return Err(RemoteError::EmptyDataset);
+                }
+
+                if let Some(deserialized) = op.deserialize(&cached_json) {
+                    trace!("Cache hit for operation {operation} with key {cache_key}");
+                    return Ok(deserialized);
+                }
             }
 
             let mut workers: FuturesUnordered<_> = remotes
@@ -131,36 +155,55 @@ where
                 .filter(|r| r.id() == target_source || (target_source.is_empty() && op.broadcast()))
                 .map(|r| {
                     let op = op.clone();
-                    async move { op.execute(r.as_ref()).await }
+
+                    async move {
+                        tokio::time::timeout(PROVIDER_TIMEOUT, op.execute(r.as_ref()))
+                            .await
+                            .unwrap_or_else(|_| {
+                                debug!("Remote {} timed out for {operation}", r.id());
+                                Err(RemoteError::ProcessingError.into())
+                            })
+                    }
                 })
                 .collect();
 
-            debug!("Spawned {} remote workers for operation {}", workers.len(), type_name::<Op>());
+            debug!("Spawned {} remote workers for operation {operation}", workers.len());
 
             let mut results = vec![];
+            let mut unanswered = false;
             let start_time = Instant::now();
 
             while let Some(res) = workers.next().await {
-                if let Ok(output) = res {
-                    results.push(output);
+                match res {
+                    Ok(output) => results.push(output),
+                    Err(err) => {
+                        unanswered |= !is_missing(&err);
+                        trace!("Remote worker failed for {operation}: {err:#}");
+                    }
                 }
             }
 
-            let processed = op.process(results)?;
-            let elapsed = start_time.elapsed();
+            let processed = match op.process(results) {
+                Ok(processed) => processed,
+                Err(err) => {
+                    if !unanswered
+                        && op.cache()
+                        && let Some(cache_key) = op.cache_key()
+                    {
+                        cache.insert(cache_key.to_string(), Arc::new(Value::Null)).await;
+                    }
 
-            debug!("Remote operation {} completed in {:.2?}", type_name::<Op>(), elapsed);
+                    return Err(err);
+                }
+            };
+
+            debug!("Remote operation {operation} completed in {:.2?}", start_time.elapsed());
 
             if op.cache()
                 && let Some(cache_key) = op.cache_key()
                 && let Some(serialized_value) = op.serialize(&processed)
             {
-                trace!(
-                    "Caching result for operation {} with key {}",
-                    type_name::<Op>(),
-                    &*cache_key
-                );
-                cache.insert(cache_key.to_string(), serialized_value).await;
+                cache.insert(cache_key.to_string(), Arc::new(serialized_value)).await;
             }
 
             Ok(processed)

@@ -11,6 +11,7 @@ use crate::models::Id;
 pub struct GetCoverArt<'op> {
     #[serde(borrow)]
     pub id: Id<'op>,
+    #[serde(default, deserialize_with = "crate::models::empty_as_none")]
     pub size: Option<u32>,
 }
 

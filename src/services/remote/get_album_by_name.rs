@@ -47,8 +47,8 @@ impl<'op> RemoteOperation for GetAlbumByName<'op> {
         Some(format!("get_album_by_name:{}", self.name).into())
     }
 
-    fn deserialize(&self, value: Value) -> Option<Self::Output> {
-        serde_json::from_value(value).ok()
+    fn deserialize(&self, value: &Value) -> Option<Self::Output> {
+        Self::Output::deserialize(value).ok()
     }
 
     fn serialize(&self, output: &Self::Output) -> Option<Value> {

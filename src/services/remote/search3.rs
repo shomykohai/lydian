@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use super::{RemoteError, RemoteOperation};
 use crate::MusicProvider;
-use crate::models::{Mergeable, SearchResult};
+use crate::models::{Mergeable, SEARCH_LIMIT, SearchResult};
 use crate::providers::SearchRequest;
 
 #[derive(Debug, Deserialize)]
@@ -35,17 +35,15 @@ impl<'op> RemoteOperation for Search3<'op> {
         }
 
         let mut iter = items.into_iter();
-
         let mut first_res = iter.next().ok_or(RemoteError::ProcessingError)?;
 
         for res in iter {
-            // Todo: Make sure we don't return more than asked
             first_res.merge(res);
         }
 
-        Ok(first_res)
+        first_res.order_by(&self.request.query, &self.request);
 
-        // TODO: Merge and dedup
+        Ok(first_res)
     }
 
     fn cache_key(&self) -> Option<Cow<'static, str>> {
@@ -53,19 +51,19 @@ impl<'op> RemoteOperation for Search3<'op> {
             format!(
                 "search3:{}_{}_{}_{}_{}_{}_{}",
                 self.request.query.trim(),
-                self.request.album_count.unwrap_or(10),
+                self.request.album_count.unwrap_or(SEARCH_LIMIT),
                 self.request.album_offset.unwrap_or(0),
-                self.request.artist_count.unwrap_or(10),
+                self.request.artist_count.unwrap_or(SEARCH_LIMIT),
                 self.request.artist_offset.unwrap_or(0),
-                self.request.song_count.unwrap_or(10),
+                self.request.song_count.unwrap_or(SEARCH_LIMIT),
                 self.request.song_offset.unwrap_or(0),
             )
             .into(),
         )
     }
 
-    fn deserialize(&self, value: Value) -> Option<Self::Output> {
-        serde_json::from_value(value).ok()
+    fn deserialize(&self, value: &Value) -> Option<Self::Output> {
+        Self::Output::deserialize(value).ok()
     }
 
     fn serialize(&self, output: &Self::Output) -> Option<Value> {
