@@ -8,6 +8,7 @@ use tokio::io::AsyncWriteExt;
 use tokio_util::io::ReaderStream;
 
 use super::keys::StorageKey;
+use crate::utils::mime::MediaType;
 
 pub struct LocalFile {
     pub path: PathBuf,
@@ -50,25 +51,39 @@ impl DiskDriver {
 
     pub async fn resolve_path_prefix(&self, key: &str) -> Option<PathBuf> {
         let target_path = self.resolve_path(key);
-        let parent_dir = target_path.parent()?;
 
+        for suffix in MediaType::extensions() {
+            let mut candidate = target_path.clone().into_os_string();
+            candidate.push(".");
+            candidate.push(suffix);
+
+            let candidate = PathBuf::from(candidate);
+
+            if try_exists(&candidate).await.unwrap_or(false) {
+                return Some(candidate);
+            }
+        }
+
+        self.scan_for_prefix(&target_path).await
+    }
+
+    async fn scan_for_prefix(&self, target_path: &Path) -> Option<PathBuf> {
+        let parent_dir = target_path.parent()?;
         let target_name = target_path.file_name()?.to_str()?;
 
         let mut entries = read_dir(parent_dir).await.ok()?;
 
         while let Some(entry) = entries.next_entry().await.ok()? {
-            let path = entry.path();
-
-            if !path.is_file() {
-                continue;
-            }
-
-            let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {
+            let Some(file_name) = entry.file_name().to_str().map(str::to_owned) else {
                 continue;
             };
 
-            if file_name.starts_with(target_name) {
-                return Some(path);
+            if !file_name.strip_prefix(target_name).is_some_and(|rest| rest.starts_with('.')) {
+                continue;
+            }
+
+            if entry.file_type().await.is_ok_and(|kind| kind.is_file()) {
+                return Some(entry.path());
             }
         }
 
@@ -242,25 +257,33 @@ impl DiskDriver {
         self.exists(&key.to_file_name()).await
     }
 
-    pub async fn create_temp_for_key(&self, key: &StorageKey) -> Result<File> {
-        let file_name = key.to_file_name();
-        let path = Path::new(&file_name);
-
+    pub fn tmp_key_for(file_name: &str) -> Result<String> {
+        let path = Path::new(file_name);
         let parent = path.parent().unwrap_or_else(|| Path::new(""));
         let name = path.file_name().ok_or_else(|| anyhow::anyhow!("Invalid file name"))?;
-        let tmp_key = parent.join("tmp").join(name).to_string_lossy().to_string();
 
-        self.create_file(&tmp_key).await
+        Ok(parent.join("tmp").join(name).to_string_lossy().to_string())
+    }
+
+    pub async fn create_temp_for_name(&self, file_name: &str) -> Result<File> {
+        self.create_file(&Self::tmp_key_for(file_name)?).await
+    }
+
+    pub async fn commit_temp_for_name(&self, file_name: &str) -> Result<()> {
+        let tmp_key = Self::tmp_key_for(file_name)?;
+
+        if let Ok(file) = File::open(self.resolve_path(&tmp_key)).await {
+            file.sync_all().await?;
+        }
+
+        self.rename_file(&tmp_key, file_name).await
+    }
+
+    pub async fn create_temp_for_key(&self, key: &StorageKey) -> Result<File> {
+        self.create_temp_for_name(&key.to_file_name()).await
     }
 
     pub async fn commit_temp_for_key(&self, key: &StorageKey) -> Result<()> {
-        let file_name = key.to_file_name();
-        let path = Path::new(&file_name);
-
-        let parent = path.parent().unwrap_or_else(|| Path::new(""));
-        let name = path.file_name().ok_or_else(|| anyhow::anyhow!("Invalid file name"))?;
-        let tmp_key = parent.join("tmp").join(name).to_string_lossy().to_string();
-
-        self.rename_file(&tmp_key, &file_name).await
+        self.commit_temp_for_name(&key.to_file_name()).await
     }
 }
