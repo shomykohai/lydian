@@ -97,7 +97,7 @@ impl<'a> Service<MigrationRequest<'a>> for MigrationService {
 
         let state = self.state.clone();
         Box::pin(async move {
-            if state.storage.disk.exists_by_prefix(&path).await {
+            if tokio::fs::try_exists(&path).await.unwrap_or(false) {
                 return Ok(());
             }
 
@@ -130,8 +130,8 @@ impl<'a> Service<MigrationRequest<'a>> for MigrationService {
                 Some(cover_art) => {
                     let disk = &state.storage.disk;
 
-                    let key =
-                        &StorageKey::CoverArt { id: cover_art.to_string(), size: 0 }.to_file_name();
+                    let key = &StorageKey::CoverArt { id: cover_art.to_string(), size: None }
+                        .to_file_name();
 
                     if let (Ok(mut file), Some(ext)) = (
                         disk.get_file_by_prefix(key).await,

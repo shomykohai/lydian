@@ -8,11 +8,14 @@ use serde_json::Value;
 use super::{RemoteError, RemoteOperation};
 use crate::MusicProvider;
 use crate::models::{ArtistWithAlbumsID3, Id, Mergeable};
+use crate::providers::ArtistRef;
 
 #[derive(Debug, Deserialize)]
 pub struct GetArtist<'op> {
     #[serde(borrow)]
     pub id: Id<'op>,
+    #[serde(skip)]
+    pub reference: Option<ArtistRef>,
 }
 
 #[async_trait]
@@ -24,7 +27,15 @@ impl<'op> RemoteOperation for GetArtist<'op> {
     }
 
     async fn execute(&self, provider: &dyn MusicProvider) -> Result<Self::Output> {
-        Ok(provider.get_artist(&self.id).await?)
+        if provider.is_own_id(&self.id) {
+            return provider.get_artist(&self.id).await;
+        }
+
+        let Some(reference) = &self.reference else {
+            return Err(RemoteError::EmptyDataset.into());
+        };
+
+        provider.find_artist(reference).await.ok_or_else(|| RemoteError::EmptyDataset.into())
     }
 
     fn process(&self, items: Vec<Self::Output>) -> Result<Self::Output, RemoteError> {
