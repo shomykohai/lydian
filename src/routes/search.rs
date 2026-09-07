@@ -22,9 +22,11 @@ pub async fn search3(
 
     let (parts, body) = req.into_parts();
 
-    let Ok(search_req) = subsonic.parse_query::<Search3<'_>>(&parts) else {
+    let Ok(mut search_req) = subsonic.parse_query::<Search3<'_>>(&parts) else {
         return subsonic.build_error(format, SubsonicErrorCode::RequiredParameterMissing);
     };
+
+    search_req.request.fill_counts();
 
     let origin = subsonic.request::<SearchResult<'_>>(
         parts.method.clone(),
