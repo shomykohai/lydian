@@ -3,17 +3,20 @@ use axum::extract::{Request, State};
 use axum::response::Response;
 use is_empty::IsEmpty;
 use log::debug;
-use reqwest::StatusCode;
+use reqwest::{Method, StatusCode};
 use tower::Service;
 
 use crate::models::{
     ArtistInfo,
     ArtistWithAlbumsID3,
-    FuzzyMatch,
+    Limit,
     Mergeable,
+    SIMILAR_ARTIST_LIMIT,
+    SubsonicEntity,
     SubsonicErrorCode,
     SubsonicRespFormat,
 };
+use crate::providers::ArtistRef;
 use crate::routes::{LydianState, SubsonicExt};
 use crate::services::{GetArtist, GetArtistInfo, RemoteLookupService};
 
@@ -31,17 +34,44 @@ pub async fn get_artist_info(
         return subsonic.build_error(format, SubsonicErrorCode::RequiredParameterMissing);
     };
 
-    let mut subsonic_resp = subsonic
-        .request::<ArtistInfo<'_>>(
+    let mut service = RemoteLookupService { remotes: &state.remotes, cache: state.cache.clone() };
+    let mut op = op;
+    let count = op.count;
+
+    let describe = async {
+        if op.id.is_external() {
+            return None;
+        }
+
+        subsonic
+            .request::<ArtistWithAlbumsID3<'_>>(
+                Method::GET,
+                "/rest/getArtist",
+                Some(&format!("id={}", op.id.raw())),
+                parts.headers.clone(),
+                None,
+            )
+            .await
+            .ok()
+            .and_then(|resp| resp.answer)
+    };
+
+    let (mut subsonic_resp, described) = futures::join!(
+        subsonic.request::<ArtistInfo<'_>>(
             parts.method.clone(),
             parts.uri.path(),
             parts.uri.query(),
             parts.headers.clone(),
             Some(body),
-        )
-        .await;
+        ),
+        describe,
+    );
 
-    let mut service = RemoteLookupService { remotes: &state.remotes, cache: state.cache.clone() };
+    if let Some(artist) = described.filter(|artist| !artist.base.name.is_empty()) {
+        op.reference = Some(ArtistRef::of(&artist));
+    }
+
+    let remote_artist_info = service.call(op).await;
 
     let mut unified_result = if let Ok(ref mut resp) = subsonic_resp
         && !resp.is_err()
@@ -52,14 +82,18 @@ pub async fn get_artist_info(
         ArtistInfo::default()
     };
 
-    if let Ok(remote_artist_info) = service.call(op).await {
+    if let Ok(remote_artist_info) = remote_artist_info {
         unified_result.merge(remote_artist_info);
     }
+
+    unified_result.similar_artist.limit(count.unwrap_or(SIMILAR_ARTIST_LIMIT));
 
     if unified_result.is_empty() {
         subsonic.build_error(format, SubsonicErrorCode::NotFound)
     } else {
-        subsonic.build_response(format, StatusCode::OK, Some(unified_result))
+        let field = <ArtistInfo<'_> as SubsonicEntity>::field_for(parts.uri.path());
+
+        subsonic.build_response_for(format, StatusCode::OK, Some(unified_result), field)
     }
 }
 
@@ -79,7 +113,10 @@ pub async fn get_artist(
 
     let mut service = RemoteLookupService { remotes: &state.remotes, cache: state.cache.clone() };
 
-    let mut subsonic_resp = if !op.id.is_external() {
+    let mut op = op;
+    let local = !op.id.is_external();
+
+    let mut subsonic_resp = if local {
         Some(
             subsonic
                 .request::<ArtistWithAlbumsID3<'_>>(
@@ -104,7 +141,13 @@ pub async fn get_artist(
         ArtistWithAlbumsID3::default()
     };
 
-    if let Ok(mut remote_artist) = service.call(op).await {
+    if local && !unified_result.base.name.is_empty() {
+        op.reference = Some(ArtistRef::of(&unified_result));
+    }
+
+    let remote_artist = service.call(op).await;
+
+    if let Ok(mut remote_artist) = remote_artist {
         if !unified_result.base.id.is_empty()
             && let Some(ref mut remote_albums) = remote_artist.album
         {
@@ -113,7 +156,7 @@ pub async fn get_artist(
                 if let Some(ref mut artists) = album.artists {
                     // TODO: Link other local artists too if they exist
                     for a in artists {
-                        if a.is_similar_to(&unified_result.base) {
+                        if a.matches(&unified_result.base) {
                             a.id = unified_result.base.id.clone();
                         }
                     }

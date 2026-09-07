@@ -5,7 +5,15 @@ use log::debug;
 use reqwest::StatusCode;
 use tower::Service;
 
-use crate::models::{Mergeable, Song, SubsonicErrorCode, SubsonicRespFormat, TopSongs};
+use crate::models::{
+    Limit,
+    Mergeable,
+    Song,
+    SubsonicErrorCode,
+    SubsonicRespFormat,
+    TOP_SONG_LIMIT,
+    TopSongs,
+};
 use crate::routes::{LydianState, SubsonicExt};
 use crate::services::{GetSong, GetTopSongs, RemoteLookupService};
 
@@ -19,21 +27,23 @@ pub async fn get_top_songs(
 
     let (parts, body) = req.into_parts();
 
-    let mut subsonic_resp = subsonic
-        .request::<TopSongs<'_>>(
-            parts.method.clone(),
-            parts.uri.path(),
-            parts.uri.query(),
-            parts.headers.clone(),
-            Some(body),
-        )
-        .await;
-
     let Ok(op) = subsonic.parse_query::<GetTopSongs<'_>>(&parts) else {
         return subsonic.build_error(format, SubsonicErrorCode::RequiredParameterMissing);
     };
 
     let mut service = RemoteLookupService { remotes: &state.remotes, cache: state.cache.clone() };
+    let count = op.count;
+
+    let (mut subsonic_resp, remote_songs) = futures::join!(
+        subsonic.request::<TopSongs<'_>>(
+            parts.method.clone(),
+            parts.uri.path(),
+            parts.uri.query(),
+            parts.headers.clone(),
+            Some(body),
+        ),
+        service.call(op),
+    );
 
     let mut unified_result = TopSongs { song: None };
 
@@ -45,9 +55,11 @@ pub async fn get_top_songs(
         unified_result.song = Some(local_songs);
     }
 
-    if let Ok(remote_songs) = service.call(op).await {
+    if let Ok(remote_songs) = remote_songs {
         unified_result.merge(remote_songs);
     }
+
+    unified_result.song.limit(count.unwrap_or(TOP_SONG_LIMIT));
 
     subsonic.build_response(format, StatusCode::OK, Some(unified_result))
 }

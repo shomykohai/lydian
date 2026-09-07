@@ -8,7 +8,6 @@ use tower::Service;
 use crate::models::{
     AlbumInfo,
     AlbumWithSongsID3,
-    FuzzyMatch,
     Mergeable,
     SubsonicErrorCode,
     SubsonicRespFormat,
@@ -122,7 +121,7 @@ pub async fn get_album<'a>(
 
         if let Some(albums) = albums {
             for album in albums {
-                if unified_result.is_similar_to(&album) {
+                if unified_result.matches(&album) {
                     if album.base.song_count == origin_track_count {
                         /* This means this album can be marked as migrated already,
                          * so we won't be hitting the remotes for this album again in the

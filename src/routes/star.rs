@@ -9,10 +9,10 @@ use tokio::sync::watch;
 use tower::Service;
 
 use crate::models::{AlbumWithSongsID3, Id, IdType, SubsonicErrorCode, SubsonicRespFormat};
-use crate::providers::StreamRequest;
 use crate::routes::{LydianState, SubsonicExt, Username};
-use crate::services::{MigrationRequest, MigrationService, StreamMedia};
+use crate::services::{MigrationRequest, MigrationService};
 use crate::storage::keys::StorageKey;
+use crate::workers::download::DownloadSource;
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -152,32 +152,28 @@ pub async fn star(
         let file_name = storage_key.to_file_name();
 
         if !state.storage.disk.exists_by_prefix(&file_name).await {
-            let media_stream = StreamMedia {
-                request: StreamRequest { id: media_id.clone(), ..Default::default() },
-                range_header: Some("bytes=0-9".into()),
-            };
-
-            if let Ok(resp) = provider.stream(&media_stream).await {
+            if let Some(source) = provider.download_source(media_id).await {
                 let (tx, rx) = watch::channel(false);
                 state.services.queue_download_with_completion(
                     file_name.clone(),
-                    resp.url(),
+                    source,
                     Arc::new(tx),
                 );
                 completion_receivers.push(rx);
             }
 
             if let Some(cover_art) = &song.cover_art {
-                let cover_art_key = StorageKey::CoverArt { id: cover_art.to_string(), size: 0 };
+                let cover_art_key = StorageKey::CoverArt { id: cover_art.to_string(), size: None };
                 let cover_art_file_name = cover_art_key.to_file_name();
 
                 if !state.storage.disk.exists_by_prefix(&cover_art_file_name).await
                     && let Ok(resp) = provider.get_cover_art(cover_art, None).await
+                    && let Some(source) = DownloadSource::from_response(&resp)
                 {
                     let (tx, rx) = watch::channel(false);
                     state.services.queue_download_with_completion(
                         cover_art_file_name.clone(),
-                        resp.url(),
+                        source,
                         Arc::new(tx),
                     );
                     completion_receivers.push(rx);
