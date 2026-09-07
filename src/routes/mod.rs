@@ -63,7 +63,22 @@ impl AppRouter {
                 Method::DELETE,
                 Method::OPTIONS,
             ])
-            .allow_headers([axum::http::header::CONTENT_TYPE, axum::http::header::AUTHORIZATION]);
+            .allow_headers([
+                axum::http::header::CONTENT_TYPE,
+                axum::http::header::AUTHORIZATION,
+                axum::http::header::RANGE,
+                axum::http::header::IF_RANGE,
+                axum::http::header::IF_NONE_MATCH,
+                axum::http::header::IF_MODIFIED_SINCE,
+            ])
+            .expose_headers([
+                axum::http::header::CONTENT_LENGTH,
+                axum::http::header::CONTENT_RANGE,
+                axum::http::header::ACCEPT_RANGES,
+                axum::http::header::CONTENT_TYPE,
+                axum::http::header::LAST_MODIFIED,
+                axum::http::header::ETAG,
+            ]);
 
         let proxy_config = TrustedProxyConfig::new(state.config.server.trusted_proxies.clone());
 
