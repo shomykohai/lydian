@@ -1,9 +1,10 @@
-use anyhow::{Result, bail};
+use anyhow::Result;
 use async_trait::async_trait;
 use rand::RngExt;
 use rand::distr::Alphanumeric;
 use reqwest::header::{CONTENT_TYPE, RANGE};
 use reqwest::{Client, Url};
+use thiserror::Error as TError;
 
 use crate::models::{
     AlbumInfo,
@@ -19,7 +20,15 @@ use crate::models::{
     TopSongs,
 };
 use crate::providers::{MusicProvider, SearchRequest};
-use crate::services::StreamMedia;
+use crate::services::{RemoteError, StreamMedia};
+
+#[derive(TError, Debug)]
+enum FederatedError {
+    #[error("Unsupported url scheme for a federated server: {0}")]
+    UnsupportedScheme(String),
+    #[error("Upstream server answered getCoverArt with {0}")]
+    NotAnImage(String),
+}
 
 pub struct SubsonicProvider {
     client: Client,
@@ -39,7 +48,7 @@ impl SubsonicProvider {
     ) -> Result<Self> {
         let parsed_url = Url::parse(base_url)?;
         if !matches!(parsed_url.scheme(), "http" | "https") {
-            bail!("Invalid URL scheme for federated server: {}", parsed_url.scheme());
+            return Err(FederatedError::UnsupportedScheme(parsed_url.scheme().to_string()).into());
         }
 
         Ok(Self {
@@ -86,13 +95,11 @@ impl MusicProvider for SubsonicProvider {
         let res =
             req.send().await?.json::<SubsonicResponse<ArtistWithAlbumsID3<'static>>>().await?;
 
-        if let Some(mut artist) = res.answer {
-            artist.tag_origin(self.id(), IdType::Artist);
-            artist.base.starred = None;
-            Ok(artist)
-        } else {
-            bail!("Failed to fetch artist from federated server: {:?}", res.error)
-        }
+        let mut artist = res.into_answer()?;
+        artist.tag_origin(self.id(), IdType::Artist);
+        artist.base.starred = None;
+
+        Ok(artist)
     }
 
     async fn get_artist_info<'a>(&self, id: &Id<'_>) -> Result<ArtistInfo<'a>> {
@@ -103,12 +110,10 @@ impl MusicProvider for SubsonicProvider {
         let req = self.client.get(url).query(&self.build_auth_query());
         let res = req.send().await?.json::<SubsonicResponse<ArtistInfo<'static>>>().await?;
 
-        if let Some(mut info) = res.answer {
-            info.tag_origin(self.id(), IdType::Artist);
-            Ok(info)
-        } else {
-            bail!("Failed to fetch album info from federated server: {:?}", res.error)
-        }
+        let mut info = res.into_answer()?;
+        info.tag_origin(self.id(), IdType::Artist);
+
+        Ok(info)
     }
 
     async fn get_album_info<'a>(&self, id: &Id<'_>) -> Result<AlbumInfo<'a>> {
@@ -119,11 +124,7 @@ impl MusicProvider for SubsonicProvider {
         let req = self.client.get(url).query(&self.build_auth_query());
         let res = req.send().await?.json::<SubsonicResponse<AlbumInfo<'static>>>().await?;
 
-        if let Some(info) = res.answer {
-            Ok(info)
-        } else {
-            bail!("Failed to fetch album info from federated server: {:?}", res.error)
-        }
+        Ok(res.into_answer()?)
     }
 
     async fn get_album<'a>(&self, id: &Id<'_>) -> Result<AlbumWithSongsID3<'a>> {
@@ -134,21 +135,18 @@ impl MusicProvider for SubsonicProvider {
         let req = self.client.get(url).query(&self.build_auth_query());
         let res = req.send().await?.json::<SubsonicResponse<AlbumWithSongsID3<'static>>>().await?;
 
-        if let Some(mut album) = res.answer {
-            album.tag_origin(self.id(), IdType::Album);
-            album.base.starred = None;
-            album.base.played = None;
-            album.song.iter_mut().for_each(|song| {
-                song.suffix = Some(
-                    format!("{} ({})", song.suffix.clone().unwrap_or_default(), self.id()).into(),
-                );
-                song.starred = None;
-                song.played = None;
-            });
-            Ok(album)
-        } else {
-            bail!("Failed to fetch album from federated server: {:?}", res.error)
-        }
+        let mut album = res.into_answer()?;
+        album.tag_origin(self.id(), IdType::Album);
+        album.base.starred = None;
+        album.base.played = None;
+        album.song.iter_mut().for_each(|song| {
+            song.suffix =
+                Some(format!("{} ({})", song.suffix.clone().unwrap_or_default(), self.id()).into());
+            song.starred = None;
+            song.played = None;
+        });
+
+        Ok(album)
     }
 
     async fn get_song<'a>(&self, id: &Id<'_>) -> Result<Song<'a>> {
@@ -159,16 +157,14 @@ impl MusicProvider for SubsonicProvider {
         let req = self.client.get(url).query(&self.build_auth_query());
         let res = req.send().await?.json::<SubsonicResponse<Song<'static>>>().await?;
 
-        if let Some(mut song) = res.answer {
-            song.tag_origin(self.id(), IdType::Song);
-            song.starred = None;
-            song.played = None;
-            song.suffix =
-                Some(format!("{} ({})", song.suffix.clone().unwrap_or_default(), self.id()).into());
-            Ok(song)
-        } else {
-            bail!("Failed to fetch song from federated server: {:?}", res.error)
-        }
+        let mut song = res.into_answer()?;
+        song.tag_origin(self.id(), IdType::Song);
+        song.starred = None;
+        song.played = None;
+        song.suffix =
+            Some(format!("{} ({})", song.suffix.clone().unwrap_or_default(), self.id()).into());
+
+        Ok(song)
     }
 
     async fn get_top_songs<'a>(&self, artist: &str, count: Option<u32>) -> Result<TopSongs<'a>> {
@@ -183,23 +179,19 @@ impl MusicProvider for SubsonicProvider {
         let req = self.client.get(url).query(&self.build_auth_query());
         let res = req.send().await?.json::<SubsonicResponse<TopSongs<'static>>>().await?;
 
-        if let Some(mut top_songs) = res.answer {
-            top_songs.tag_origin(self.id(), IdType::Song);
-            if let Some(songs) = top_songs.song.as_mut() {
-                songs.iter_mut().for_each(|song| {
-                    song.suffix = Some(
-                        format!("{} ({})", song.suffix.clone().unwrap_or_default(), self.id())
-                            .into(),
-                    );
-                    song.starred = None;
-                    song.played = None;
-                });
-            }
-
-            Ok(top_songs)
-        } else {
-            bail!("Failed to fetch top songs from federated server: {:?}", res.error)
+        let mut top_songs = res.into_answer()?;
+        top_songs.tag_origin(self.id(), IdType::Song);
+        if let Some(songs) = top_songs.song.as_mut() {
+            songs.iter_mut().for_each(|song| {
+                song.suffix = Some(
+                    format!("{} ({})", song.suffix.clone().unwrap_or_default(), self.id()).into(),
+                );
+                song.starred = None;
+                song.played = None;
+            });
         }
+
+        Ok(top_songs)
     }
 
     async fn search<'a>(&self, query: &SearchRequest<'a>) -> Result<SearchResult<'a>> {
@@ -220,13 +212,12 @@ impl MusicProvider for SubsonicProvider {
 
         let res = req.send().await?.json::<SubsonicResponse<SearchResult<'static>>>().await?;
 
-        if let Some(mut search_results) = res.answer {
-            search_results.tag_origin(self.id(), IdType::Generic);
-            Ok(search_results)
-        } else {
-            log::error!("Search failed on federated server: {:?}", res.error);
-            bail!("Search failed on federated server: {:?}", res.error)
-        }
+        let mut search_results = res
+            .into_answer()
+            .inspect_err(|err| log::error!("Search failed on federated server: {err}"))?;
+        search_results.tag_origin(self.id(), IdType::Generic);
+
+        Ok(search_results)
     }
 
     async fn get_cover_art(&self, id: &Id<'_>, size: Option<u32>) -> Result<reqwest::Response> {
@@ -242,14 +233,14 @@ impl MusicProvider for SubsonicProvider {
         let res = req.send().await?;
 
         if !res.status().is_success() {
-            bail!("Upstream Subsonic server returned status code: {}", res.status());
+            return Err(RemoteError::Status(res.status()).into());
         }
 
         let content_type =
             res.headers().get(CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("");
 
         if content_type.starts_with("application/json") || content_type.starts_with("text/") {
-            bail!("Upstream subsonic server did not return an image!");
+            return Err(FederatedError::NotAnImage(content_type.to_string()).into());
         }
 
         return Ok(res);
@@ -290,7 +281,7 @@ impl MusicProvider for SubsonicProvider {
         let res = http_req.send().await?;
 
         if !res.status().is_success() {
-            bail!("Upstream subsonic streaming server returned error code: {}", res.status());
+            return Err(RemoteError::Status(res.status()).into());
         }
 
         Ok(res)

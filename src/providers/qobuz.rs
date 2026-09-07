@@ -1,12 +1,13 @@
 use std::borrow::Cow;
 use std::vec::IntoIter;
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{Datelike, NaiveDate, Utc};
 use reqwest::header::RANGE;
 use reqwest::{Client, Response};
 use serde::{Deserialize, Deserializer};
+use thiserror::Error as TError;
 
 use crate::models::{
     AlbumID3,
@@ -29,8 +30,14 @@ use crate::models::{
     Work,
 };
 use crate::providers::MusicProvider;
-use crate::providers::base::SearchRequest;
+use crate::providers::base::{ProviderError, SearchRequest};
 use crate::services::{RemoteError, StreamMedia};
+
+#[derive(TError, Debug)]
+enum QobuzError {
+    #[error("Unrecognised cover art id: {0}")]
+    CoverArtId(String),
+}
 
 #[derive(Debug, Deserialize)]
 pub struct QobuzResponse<T> {
@@ -197,10 +204,10 @@ fn map_qobuz_genres<'a>(genre_opt: Option<QobuzGenre>) -> Option<Vec<ItemGenre<'
 }
 
 impl<'a> TryFrom<QobuzArtist> for ArtistID3<'a> {
-    type Error = &'static str;
+    type Error = ProviderError;
 
     fn try_from(art: QobuzArtist) -> Result<Self, Self::Error> {
-        let name = art.name.ok_or("Missing artist name")?;
+        let name = art.name.ok_or(ProviderError::MissingName(IdType::Artist))?;
         let artist_cover_id = encode_cover_id(&art.image, "ar");
 
         Ok(ArtistID3 {
@@ -213,12 +220,13 @@ impl<'a> TryFrom<QobuzArtist> for ArtistID3<'a> {
             music_brainz_id: None,
             sort_name: None,
             roles: None,
+            is_external: None,
         })
     }
 }
 
 impl<'a> TryFrom<QobuzArtist> for ArtistWithAlbumsID3<'a> {
-    type Error = &'static str;
+    type Error = ProviderError;
 
     fn try_from(mut art: QobuzArtist) -> Result<Self, Self::Error> {
         let releases = art.releases.take().unwrap_or_default();
@@ -236,7 +244,7 @@ impl<'a> TryFrom<QobuzArtist> for ArtistWithAlbumsID3<'a> {
 }
 
 impl<'a> TryFrom<QobuzAlbum> for AlbumID3<'a> {
-    type Error = &'static str;
+    type Error = ProviderError;
 
     fn try_from(alb: QobuzAlbum) -> Result<Self, Self::Error> {
         let parsed_date = parse_qobuz_date(&alb.release_date_original);
@@ -255,6 +263,7 @@ impl<'a> TryFrom<QobuzAlbum> for AlbumID3<'a> {
                     music_brainz_id: None,
                     sort_name: None,
                     roles: None,
+                    is_external: None,
                 }]
             })
         });
@@ -296,12 +305,13 @@ impl<'a> TryFrom<QobuzAlbum> for AlbumID3<'a> {
             is_compilation: None,
             explicit_status: explicit,
             disc_titles: None,
+            is_external: None,
         })
     }
 }
 
 impl<'a> TryFrom<QobuzAlbum> for AlbumInfo<'a> {
-    type Error = &'static str;
+    type Error = ProviderError;
 
     fn try_from(alb: QobuzAlbum) -> Result<Self, Self::Error> {
         Ok(AlbumInfo {
@@ -320,7 +330,7 @@ impl<'a> TryFrom<QobuzAlbum> for AlbumInfo<'a> {
 }
 
 impl<'a> TryFrom<QobuzTrack> for Song<'a> {
-    type Error = &'static str;
+    type Error = ProviderError;
 
     fn try_from(trk: QobuzTrack) -> Result<Self, Self::Error> {
         let genre_name = trk.genre.as_ref().and_then(|g| g.name.clone()).map(Cow::Owned);
@@ -338,6 +348,7 @@ impl<'a> TryFrom<QobuzTrack> for Song<'a> {
                     music_brainz_id: None,
                     sort_name: None,
                     roles: None,
+                    is_external: None,
                 }]
             })
         });
@@ -423,12 +434,13 @@ impl<'a> TryFrom<QobuzTrack> for Song<'a> {
             works: work,
             movements: None,
             groupings: None,
+            is_external: None,
         })
     }
 }
 
 impl TryFrom<QobuzAlbumWithTracks> for AlbumWithSongsID3<'_> {
-    type Error = &'static str;
+    type Error = ProviderError;
 
     fn try_from(alb: QobuzAlbumWithTracks) -> Result<Self, Self::Error> {
         let album_id3 = AlbumID3::try_from(alb.album)?;
@@ -452,6 +464,8 @@ pub struct QobuzDlClient {
 }
 
 impl QobuzDlClient {
+    const PROVIDER: &str = "qobuz";
+
     pub fn new(client: Client, base_url: &str, provider_id: &str) -> Self {
         Self { client, url: base_url.into(), provider_id: provider_id.into() }
     }
@@ -484,7 +498,7 @@ impl MusicProvider for QobuzDlClient {
     }
 
     async fn get_artist_info<'a>(&self, _id: &Id<'_>) -> Result<ArtistInfo<'a>> {
-        unimplemented!()
+        Err(RemoteError::Unsupported(Self::PROVIDER).into())
     }
 
     async fn get_album_info<'a>(&self, id: &Id<'_>) -> Result<AlbumInfo<'a>> {
@@ -551,7 +565,7 @@ impl MusicProvider for QobuzDlClient {
     }
 
     async fn get_top_songs<'a>(&self, _artist: &str, _count: Option<u32>) -> Result<TopSongs<'a>> {
-        Err(RemoteError::EmptyDataset.into())
+        Err(RemoteError::Unsupported(Self::PROVIDER).into())
     }
 
     async fn search<'a>(&self, query: &SearchRequest) -> Result<SearchResult<'a>> {
@@ -598,7 +612,7 @@ impl MusicProvider for QobuzDlClient {
                 remaining.replace("-", "/")
             )
         } else {
-            bail!("Invalid cover art ID format prefix");
+            return Err(QobuzError::CoverArtId(raw_id.to_string()).into());
         };
 
         let response = self.client.get(&target_url).send().await?;
@@ -641,7 +655,7 @@ impl MusicProvider for QobuzDlClient {
         let res = media_req.send().await?;
 
         if !res.status().is_success() {
-            return Err(anyhow!(RemoteError::EmptyDataset));
+            return Err(RemoteError::EmptyDataset.into());
         }
 
         Ok(res)
