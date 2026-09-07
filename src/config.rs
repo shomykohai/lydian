@@ -229,7 +229,11 @@ impl LydianConfig {
 }
 
 impl ProvidersConfig {
-    pub fn build(&self, http_client: &reqwest::Client) -> Result<Vec<Arc<dyn MusicProvider>>> {
+    pub fn build(
+        &self,
+        http_client: &reqwest::Client,
+        download_quality: SubsonicStreamFormat,
+    ) -> Result<Vec<Arc<dyn MusicProvider>>> {
         let mut remotes: Vec<Arc<dyn MusicProvider>> = Vec::new();
 
         for (provider_name, subsonic_cfg) in &self.subsonic {
@@ -254,6 +258,19 @@ impl ProvidersConfig {
 
             let qobuz = QobuzDlClient::new(http_client.clone(), &qobuz_cfg.url, provider_name);
             remotes.push(Arc::new(qobuz));
+        }
+
+        for (provider_name, tidal_cfg) in &self.tidal {
+            let stream_api = tidal_cfg.stream_api.clone();
+
+            info!("Registering TIDAL remote [{}] streaming via {}", provider_name, stream_api);
+
+            remotes.push(Arc::new(TidalProvider::new(
+                http_client.clone(),
+                provider_name,
+                tidal_cfg,
+                download_quality,
+            )));
         }
 
         if remotes.is_empty() {

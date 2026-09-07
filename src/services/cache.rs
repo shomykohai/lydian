@@ -68,15 +68,15 @@ impl CacheCleanupService {
                         .unwrap_or(now);
 
                     if let Ok(duration) = now.duration_since(file_time)
-                        && duration > ttl {
-                            match remove_file(&entry_path).await {
-                                Ok(_) => debug!("Removed expired temp file: {:?}", entry_path),
-                                Err(e) => warn!(
-                                    "Failed to remove expired temp file {:?}: {}",
-                                    entry_path, e
-                                ),
+                        && duration > ttl
+                    {
+                        match remove_file(&entry_path).await {
+                            Ok(_) => debug!("Removed expired temp file: {:?}", entry_path),
+                            Err(e) => {
+                                warn!("Failed to remove expired temp file {:?}: {}", entry_path, e)
                             }
                         }
+                    }
                 }
             }
         }
