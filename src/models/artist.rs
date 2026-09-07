@@ -4,16 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 
 use super::{AlbumID3, CowStr};
-use crate::models::{
-    FuzzyMatch,
-    Id,
-    IdType,
-    Mergeable,
-    OptCowStr,
-    OptId,
-    SubsonicEntity,
-    TagOrigin,
-};
+use crate::models::{Id, IdType, Mergeable, SubsonicEntity, TagOrigin, by_music_brainz};
 use crate::utils;
 
 #[skip_serializing_none]
@@ -22,23 +13,28 @@ use crate::utils;
 pub struct ArtistID3<'a> {
     pub id: Id<'a>,
     pub name: CowStr<'a>,
-    pub cover_art: OptId<'a>,
-    pub artist_image_url: OptCowStr<'a>,
+    pub cover_art: Option<Id<'a>>,
+    pub artist_image_url: Option<CowStr<'a>>,
     pub album_count: Option<u32>,
     pub starred: Option<DateTime<Utc>>,
-    pub music_brainz_id: OptCowStr<'a>,
-    pub sort_name: OptCowStr<'a>,
+    pub music_brainz_id: Option<CowStr<'a>>,
+    pub sort_name: Option<CowStr<'a>>,
     pub roles: Option<Vec<CowStr<'a>>>,
-}
-
-impl FuzzyMatch for ArtistID3<'_> {
-    fn is_similar_to(&self, other: &Self) -> bool {
-        utils::string::is_similar(&self.name, &other.name)
-    }
+    pub is_external: Option<bool>,
 }
 
 impl Mergeable for ArtistID3<'_> {
     type Item = Self;
+
+    fn matches(&self, other: &Self::Item) -> bool {
+        if let Some(verdict) =
+            by_music_brainz(self.music_brainz_id.as_deref(), other.music_brainz_id.as_deref())
+        {
+            return verdict;
+        }
+
+        utils::string::is_similar(&self.name, &other.name)
+    }
 
     fn merge(&mut self, other: Self) {
         if self.cover_art.is_none() {
@@ -72,6 +68,7 @@ impl Mergeable for ArtistID3<'_> {
  * `getArtist` response, while `ArtistID3` is used for
  * a list of artists (like in search3)
  */
+#[skip_serializing_none]
 #[derive(Debug, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ArtistWithAlbumsID3<'a> {
@@ -84,14 +81,12 @@ impl SubsonicEntity for ArtistWithAlbumsID3<'_> {
     const FIELD_NAME: &'static str = "artist";
 }
 
-impl FuzzyMatch for ArtistWithAlbumsID3<'_> {
-    fn is_similar_to(&self, other: &Self) -> bool {
-        self.base.is_similar_to(&other.base)
-    }
-}
-
 impl Mergeable for ArtistWithAlbumsID3<'_> {
     type Item = Self;
+
+    fn matches(&self, other: &Self::Item) -> bool {
+        self.base.matches(&other.base)
+    }
 
     fn merge(&mut self, other: Self) {
         self.base.merge(other.base);
@@ -104,6 +99,7 @@ impl Mergeable for ArtistWithAlbumsID3<'_> {
 
 impl<'a> TagOrigin for ArtistID3<'a> {
     fn tag_origin(&mut self, origin: &str, id_type: IdType) {
+        self.is_external = Some(true);
         self.id.tag_origin(origin, id_type);
         self.cover_art.tag_origin(origin, IdType::CoverArt);
     }
@@ -120,16 +116,17 @@ impl<'a> TagOrigin for ArtistWithAlbumsID3<'a> {
 #[derive(Debug, Deserialize, Serialize, Default, IsEmpty)]
 #[serde(rename_all = "camelCase")]
 pub struct ArtistInfo<'a> {
-    pub biography: OptCowStr<'a>,
-    pub music_brainz_id: OptCowStr<'a>,
-    pub last_fm_url: OptCowStr<'a>,
-    pub small_image_url: OptCowStr<'a>,
-    pub medium_image_url: OptCowStr<'a>,
-    pub large_image_url: OptCowStr<'a>,
+    pub biography: Option<CowStr<'a>>,
+    pub music_brainz_id: Option<CowStr<'a>>,
+    pub last_fm_url: Option<CowStr<'a>>,
+    pub small_image_url: Option<CowStr<'a>>,
+    pub medium_image_url: Option<CowStr<'a>>,
+    pub large_image_url: Option<CowStr<'a>>,
     pub similar_artist: Option<Vec<ArtistID3<'a>>>,
 }
 
 impl SubsonicEntity for ArtistInfo<'_> {
+    const ALIASES: &'static [&'static str] = &["artistInfo2"];
     const FIELD_NAME: &'static str = "artistInfo";
 }
 
@@ -145,6 +142,12 @@ impl TagOrigin for ArtistInfo<'_> {
 
 impl Mergeable for ArtistInfo<'_> {
     type Item = Self;
+
+    fn matches(&self, other: &Self::Item) -> bool {
+        self.music_brainz_id.is_some()
+            && other.music_brainz_id.is_some()
+            && self.music_brainz_id == other.music_brainz_id
+    }
 
     fn merge(&mut self, other: Self) {
         if self.biography.is_none() {

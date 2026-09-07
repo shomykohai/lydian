@@ -42,6 +42,7 @@ tower = { version = "0.5.3", features = ["tokio", "log", "limit"] }
 tower-http = { version = "0.6.11", features = ["cors", "fs", "compression-gzip"] }
 tower-real-ip = "0.1.0"
 url = "2.5.8"
+bitvec = "1.1.1"
 
 [profile.dev]
 opt-level = 1

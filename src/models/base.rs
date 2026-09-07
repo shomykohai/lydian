@@ -1,42 +1,71 @@
 use std::borrow::Cow;
 use std::fmt::Display;
 
+use bitvec::bitvec;
 use serde::{Deserialize, Serialize};
 
 pub const ORIGIN_SEP: &str = "___";
-///// A type alias for a `Cow` that holds a string slice with a static lifetime.
-//pub(super) type StaticCowStr = Cow<'static, str>;
 /// A type alias for a `Cow` that holds a string slice with a generic lifetime.
 pub(super) type CowStr<'a> = Cow<'a, str>;
 
-pub(super) type OptCowStr<'a> = Option<CowStr<'a>>;
+pub fn by_music_brainz(a: Option<&str>, b: Option<&str>) -> Option<bool> {
+    let (a, b) = (a?.trim(), b?.trim());
 
-pub type OptId<'a> = Option<Id<'a>>;
+    (!a.is_empty() && !b.is_empty()).then(|| a.eq_ignore_ascii_case(b))
+}
 
-pub trait FuzzyMatch {
-    fn is_similar_to(&self, other: &Self) -> bool;
+/// What Subsonic returns when the client names no count.
+pub const SEARCH_LIMIT: u32 = 20;
+pub const SIMILAR_ARTIST_LIMIT: u32 = 20;
+pub const TOP_SONG_LIMIT: u32 = 50;
+
+pub trait Limit {
+    fn limit(&mut self, count: u32);
+}
+
+impl<T> Limit for Vec<T> {
+    fn limit(&mut self, count: u32) {
+        self.truncate(count as usize);
+    }
+}
+
+impl<T> Limit for Option<Vec<T>> {
+    fn limit(&mut self, count: u32) {
+        if let Some(items) = self.as_mut() {
+            items.limit(count);
+        }
+    }
 }
 
 pub trait Mergeable {
     type Item;
+
+    fn matches(&self, other: &Self::Item) -> bool {
+        let _ = other;
+        false
+    }
 
     fn merge(&mut self, other: Self::Item);
 }
 
 impl<T> Mergeable for Vec<T>
 where
-    T: Mergeable<Item = T> + FuzzyMatch,
+    T: Mergeable<Item = T>,
 {
     type Item = Self;
 
     fn merge(&mut self, other: Self) {
-        for other_item in other {
-            if let Some(existing_item) =
-                self.iter_mut().find(|item| item.is_similar_to(&other_item))
-            {
-                existing_item.merge(other_item);
-            } else {
-                self.push(other_item);
+        let mut absorbed = bitvec![0; self.len()];
+
+        for incoming in other {
+            let slot = absorbed.iter_zeros().find(|&at| self[at].matches(&incoming));
+
+            match slot {
+                Some(at) => {
+                    absorbed.set(at, true);
+                    self[at].merge(incoming);
+                }
+                None => self.push(incoming),
             }
         }
     }
@@ -77,8 +106,8 @@ impl IdType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(from = "CowStr<'a>", into = "String")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
+#[serde(from = "CowStr<'a>")]
 pub enum Id<'a> {
     Local { raw: CowStr<'a> },
     External { origin: CowStr<'a>, id_type: IdType, key: CowStr<'a>, raw: CowStr<'a> },
@@ -212,6 +241,12 @@ where
 impl<'a> From<Id<'a>> for String {
     fn from(id: Id<'a>) -> Self {
         id.raw().to_string()
+    }
+}
+
+impl Serialize for Id<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.raw())
     }
 }
 

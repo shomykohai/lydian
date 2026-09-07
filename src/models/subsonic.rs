@@ -11,8 +11,8 @@ use serde::de::Error;
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
-use serde_json::{Map, Value};
 use serde_repr::{Deserialize_repr, Serialize_repr};
+use serde_with::skip_serializing_none;
 use thiserror::Error as TError;
 
 use crate::models::CowStr;
@@ -80,9 +80,22 @@ impl From<Audio> for SubsonicStreamFormat {
 }
 
 impl SubsonicStreamFormat {
+    pub const fn container(self) -> &'static str {
+        match self {
+            Self::Raw | Self::Flac => "flac",
+            Self::Mp3 => "mp3",
+            Self::Ogg => "ogg",
+            Self::Aac => "aac",
+        }
+    }
+
+    pub const fn is_transcode(self) -> bool {
+        matches!(self, Self::Mp3 | Self::Ogg | Self::Aac)
+    }
+
     pub const fn mime_type(&self) -> &'static str {
         match self {
-            Self::Raw => "audio/mpeg",
+            Self::Raw => "audio/flac",
             Self::Mp3 => "audio/mpeg",
             Self::Ogg => "audio/ogg",
             Self::Flac => "audio/flac",
@@ -135,6 +148,18 @@ impl<'de> Deserialize<'de> for SubsonicStatus {
 
 pub trait SubsonicEntity {
     const FIELD_NAME: &'static str;
+    const ALIASES: &'static [&'static str] = &[];
+
+    fn field_for(path: &str) -> &'static str {
+        let path = path.to_ascii_lowercase();
+        let path = path.strip_suffix(".view").unwrap_or(&path);
+
+        Self::ALIASES
+            .iter()
+            .copied()
+            .find(|alias| path.ends_with(&alias.to_ascii_lowercase()))
+            .unwrap_or(Self::FIELD_NAME)
+    }
 }
 
 impl SubsonicEntity for () {
@@ -172,7 +197,9 @@ pub enum SubsonicErrorCode {
     NotFound = 70,
 }
 
+#[skip_serializing_none]
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SubsonicError<'a> {
     pub code: SubsonicErrorCode,
     pub message: Option<CowStr<'a>>,
@@ -188,6 +215,7 @@ pub struct SubsonicResponse<'a, T> {
     pub open_subsonic: bool,
     pub error: Option<SubsonicError<'a>>,
     pub answer: Option<T>,
+    pub field: Option<&'static str>,
 }
 
 impl<'a, T> SubsonicResponse<'a, T>
@@ -203,12 +231,16 @@ where
     pub const fn is_err(&self) -> bool {
         self.error.is_some()
     }
+
+    pub fn into_answer(self) -> Result<T, SubsonicErrorCode> {
+        match self.answer {
+            Some(answer) => Ok(answer),
+            None => Err(self.error.map_or(SubsonicErrorCode::NotFound, |error| error.code)),
+        }
+    }
 }
 
-impl<'a, T> IntoResponse for SubsonicResponse<'a, T>
-where
-    T: serde::Serialize + SubsonicEntity,
-{
+impl<T: Serialize> IntoResponse for SubsonicResponse<'_, T> {
     fn into_response(self) -> axum::response::Response {
         (StatusCode::OK, Json(self)).into_response()
     }
@@ -250,9 +282,15 @@ where
         let server_version = parse_field(&mut fields_map, "serverVersion")?;
         let open_subsonic = parse_field(&mut fields_map, "openSubsonic")?;
 
-        let answer = match fields_map.remove(T::FIELD_NAME) {
-            Some(raw) => Some(serde_json::from_str(raw.get()).map_err(D::Error::custom)?),
-            None => None,
+        let named = std::iter::once(T::FIELD_NAME)
+            .chain(T::ALIASES.iter().copied())
+            .find_map(|name| Some((name, fields_map.remove(name)?)));
+
+        let (field, answer) = match named {
+            Some((name, raw)) => {
+                (Some(name), Some(serde_json::from_str(raw.get()).map_err(D::Error::custom)?))
+            }
+            None => (None, None),
         };
 
         let error = match fields_map.remove("error") {
@@ -268,44 +306,49 @@ where
             open_subsonic,
             answer,
             error,
+            field,
         })
     }
 }
 
-impl<'a, T> Serialize for SubsonicResponse<'a, T>
-where
-    T: Serialize + SubsonicEntity,
-{
+struct Body<'a, T>(&'a SubsonicResponse<'a, T>);
+
+impl<T: Serialize> Serialize for Body<'_, T> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
-        let mut response = Map::new();
+        let response = self.0;
+        let named = response.answer.is_some() && response.field.is_some();
+        let len = 5 + usize::from(named) + usize::from(response.error.is_some());
 
-        fn to_val<V, E>(v: V) -> Result<Value, E>
-        where
-            V: Serialize,
-            E: serde::ser::Error,
-        {
-            serde_json::to_value(v).map_err(E::custom)
+        let mut map = serializer.serialize_map(Some(len))?;
+
+        map.serialize_entry("status", &response.status)?;
+        map.serialize_entry("version", &response.version)?;
+        map.serialize_entry("type", &response.server_name)?;
+        map.serialize_entry("serverVersion", &response.server_version)?;
+        map.serialize_entry("openSubsonic", &response.open_subsonic)?;
+
+        if let (Some(answer), Some(field)) = (&response.answer, response.field) {
+            map.serialize_entry(field, answer)?;
         }
 
-        response.insert("status".into(), to_val(&self.status)?);
-        response.insert("version".into(), to_val(&self.version)?);
-        response.insert("type".into(), to_val(&self.server_name)?);
-        response.insert("serverVersion".into(), to_val(&self.server_version)?);
-        response.insert("openSubsonic".into(), to_val(self.open_subsonic)?);
-
-        if let Some(ref answer) = self.answer {
-            response.insert(T::FIELD_NAME.into(), to_val(answer)?);
+        if let Some(error) = &response.error {
+            map.serialize_entry("error", error)?;
         }
 
-        if let Some(ref error) = self.error {
-            response.insert("error".into(), to_val(error)?);
-        }
+        map.end()
+    }
+}
 
+impl<T: Serialize> Serialize for SubsonicResponse<'_, T> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
         let mut root = serializer.serialize_map(Some(1))?;
-        root.serialize_entry("subsonic-response", &Value::Object(response))?;
+        root.serialize_entry("subsonic-response", &Body(self))?;
         root.end()
     }
 }

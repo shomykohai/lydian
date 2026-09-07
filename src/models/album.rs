@@ -6,16 +6,14 @@ use super::Song;
 use crate::models::{
     ArtistID3,
     CowStr,
-    FuzzyMatch,
     Id,
     IdType,
     ItemDate,
     ItemGenre,
     Mergeable,
-    OptCowStr,
-    OptId,
     SubsonicEntity,
     TagOrigin,
+    by_music_brainz,
 };
 use crate::utils::metadata::{compare_artists, compare_titles};
 
@@ -24,12 +22,13 @@ pub struct RecordLabel<'a> {
     pub name: CowStr<'a>,
 }
 
+#[skip_serializing_none]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiscTitle<'a> {
     pub disc: u32,
     pub title: CowStr<'a>,
-    pub cover_art: OptId<'a>,
+    pub cover_art: Option<Id<'a>>,
 }
 
 #[skip_serializing_none]
@@ -38,37 +37,45 @@ pub struct DiscTitle<'a> {
 pub struct AlbumID3<'a> {
     pub id: Id<'a>,
     pub name: CowStr<'a>,
-    pub version: OptCowStr<'a>,
-    pub artist: OptCowStr<'a>,
-    pub artist_id: OptId<'a>,
-    pub cover_art: OptId<'a>,
+    pub version: Option<CowStr<'a>>,
+    pub artist: Option<CowStr<'a>>,
+    pub artist_id: Option<Id<'a>>,
+    pub cover_art: Option<Id<'a>>,
     pub song_count: u32,
     pub duration: u32,
     pub play_count: Option<u64>,
     pub created: DateTime<Utc>,
-    //#[serde(skip_serializing_if = "Option::is_none")]
     pub starred: Option<DateTime<Utc>>,
     pub year: Option<u32>,
-    pub genre: OptCowStr<'a>,
+    pub genre: Option<CowStr<'a>>,
     pub played: Option<DateTime<Utc>>,
     pub user_rating: Option<u8>,
     pub record_labels: Option<Vec<RecordLabel<'a>>>,
-    pub music_brainz_id: OptCowStr<'a>,
+    pub music_brainz_id: Option<CowStr<'a>>,
     pub genres: Option<Vec<ItemGenre<'a>>>,
     pub artists: Option<Vec<ArtistID3<'a>>>,
-    pub display_artist: OptCowStr<'a>,
+    pub display_artist: Option<CowStr<'a>>,
     pub release_types: Option<Vec<CowStr<'a>>>,
     pub moods: Option<Vec<CowStr<'a>>>,
-    pub sort_name: OptCowStr<'a>,
+    pub sort_name: Option<CowStr<'a>>,
     pub original_release_date: Option<ItemDate>,
     pub release_date: Option<ItemDate>,
     pub is_compilation: Option<bool>,
-    pub explicit_status: OptCowStr<'a>,
+    pub explicit_status: Option<CowStr<'a>>,
     pub disc_titles: Option<Vec<DiscTitle<'a>>>,
+    pub is_external: Option<bool>,
 }
 
-impl FuzzyMatch for AlbumID3<'_> {
-    fn is_similar_to(&self, other: &Self) -> bool {
+impl Mergeable for AlbumID3<'_> {
+    type Item = Self;
+
+    fn matches(&self, other: &Self::Item) -> bool {
+        if let Some(verdict) =
+            by_music_brainz(self.music_brainz_id.as_deref(), other.music_brainz_id.as_deref())
+        {
+            return verdict;
+        }
+
         compare_titles(self.name.as_ref(), other.name.as_ref())
             && compare_artists(self.artist.as_deref(), other.artist.as_deref())
             && self.year == other.year
@@ -76,10 +83,6 @@ impl FuzzyMatch for AlbumID3<'_> {
                 || (self.song_count == other.song_count)
                     && self.duration.abs_diff(other.duration) <= 5)
     }
-}
-
-impl Mergeable for AlbumID3<'_> {
-    type Item = Self;
 
     fn merge(&mut self, other: Self) {
         if self.version.is_none() {
@@ -154,14 +157,12 @@ pub struct AlbumWithSongsID3<'a> {
     pub song: Vec<Song<'a>>,
 }
 
-impl FuzzyMatch for AlbumWithSongsID3<'_> {
-    fn is_similar_to(&self, other: &Self) -> bool {
-        self.base.is_similar_to(&other.base)
-    }
-}
-
 impl Mergeable for AlbumWithSongsID3<'_> {
     type Item = Self;
+
+    fn matches(&self, other: &Self::Item) -> bool {
+        self.base.matches(&other.base)
+    }
 
     fn merge(&mut self, other: Self) {
         self.base.merge(other.base);
@@ -184,6 +185,7 @@ impl<'a> TagOrigin for DiscTitle<'a> {
 
 impl<'a> TagOrigin for AlbumID3<'a> {
     fn tag_origin(&mut self, origin: &str, id_type: IdType) {
+        self.is_external = Some(true);
         self.id.tag_origin(origin, id_type);
         self.artist_id.tag_origin(origin, IdType::Artist);
         self.cover_art.tag_origin(origin, IdType::CoverArt);
@@ -203,12 +205,12 @@ impl<'a> TagOrigin for AlbumWithSongsID3<'a> {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AlbumInfo<'a> {
-    pub notes: OptCowStr<'a>,
-    pub music_brainz_id: OptCowStr<'a>,
-    pub last_fm_url: OptCowStr<'a>,
-    pub small_image_url: OptCowStr<'a>,
-    pub medium_image_url: OptCowStr<'a>,
-    pub large_image_url: OptCowStr<'a>,
+    pub notes: Option<CowStr<'a>>,
+    pub music_brainz_id: Option<CowStr<'a>>,
+    pub last_fm_url: Option<CowStr<'a>>,
+    pub small_image_url: Option<CowStr<'a>>,
+    pub medium_image_url: Option<CowStr<'a>>,
+    pub large_image_url: Option<CowStr<'a>>,
 }
 
 impl SubsonicEntity for AlbumInfo<'_> {
@@ -217,6 +219,12 @@ impl SubsonicEntity for AlbumInfo<'_> {
 
 impl Mergeable for AlbumInfo<'_> {
     type Item = Self;
+
+    fn matches(&self, other: &Self::Item) -> bool {
+        self.music_brainz_id.is_some()
+            && other.music_brainz_id.is_some()
+            && self.music_brainz_id == other.music_brainz_id
+    }
 
     fn merge(&mut self, other: Self) {
         if self.notes.is_none() {
