@@ -23,7 +23,7 @@ where
     Ok(raw.trim().parse().ok())
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ItemGenre<'a> {
     pub name: CowStr<'a>,
 }

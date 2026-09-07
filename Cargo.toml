@@ -10,7 +10,6 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1.0.102"
 async-trait = "0.1.89"
-audiotags = "0.5.0"
 axum = { version = "0.8.9", features = ["macros"] }
 chrono = { version = "0.4.45", features = ["serde"] }
 colored = "3.1.1"
@@ -43,6 +42,7 @@ tower-http = { version = "0.6.11", features = ["cors", "fs", "compression-gzip"]
 tower-real-ip = "0.1.0"
 url = "2.5.8"
 bitvec = "1.1.1"
+lofty = "0.25"
 
 [profile.dev]
 opt-level = 1

@@ -81,3 +81,18 @@ pub fn canonical(s: &str) -> String {
 pub fn is_similar(a: &str, b: &str) -> bool {
     canonical(a) == canonical(b)
 }
+
+/*
+ * Sanitize a str to so that we don't get sub folders for tracks with slashes in their title.
+ */
+pub fn path_segment(s: &str) -> String {
+    let flattened = s
+        .chars()
+        .map(|c| if std::path::is_separator(c) || c.is_control() { '_' } else { c })
+        .collect::<String>();
+
+    match flattened.trim().trim_end_matches('.').trim_end() {
+        "" => "_".to_string(),
+        segment => segment.to_string(),
+    }
+}

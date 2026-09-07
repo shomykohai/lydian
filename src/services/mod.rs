@@ -40,8 +40,10 @@ pub enum ServiceError {
         #[source]
         source: anyhow::Error,
     },
-    #[error("Audio tagging error: {0}")]
-    TaggingError(#[from] audiotags::Error),
+    #[error("Cannot read tags: {0}")]
+    TagRead(#[from] lofty::error::FileParseError),
+    #[error("Cannot write tags: {0}")]
+    TagWrite(#[from] lofty::error::FileEncodingError),
     #[error("Task join error: {0}")]
     TaskJoinError(#[from] tokio::task::JoinError),
     #[error("Database error: {0}")]

@@ -71,6 +71,33 @@ where
     }
 }
 
+/// Inherit values from another model
+pub trait Inherit {
+    type From;
+
+    fn inherit(&mut self, from: &Self::From);
+}
+
+impl<T: Inherit> Inherit for Option<T> {
+    type From = T::From;
+
+    fn inherit(&mut self, from: &Self::From) {
+        if let Some(item) = self {
+            item.inherit(from);
+        }
+    }
+}
+
+impl<T: Inherit> Inherit for Vec<T> {
+    type From = T::From;
+
+    fn inherit(&mut self, from: &Self::From) {
+        for item in self {
+            item.inherit(from);
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IdType {
     Artist,

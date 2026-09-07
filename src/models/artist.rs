@@ -8,7 +8,7 @@ use crate::models::{Id, IdType, Mergeable, SubsonicEntity, TagOrigin, by_music_b
 use crate::utils;
 
 #[skip_serializing_none]
-#[derive(Debug, Deserialize, Serialize, Default)]
+#[derive(Clone, Debug, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ArtistID3<'a> {
     pub id: Id<'a>,

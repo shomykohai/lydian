@@ -3,10 +3,12 @@ use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 
 use crate::models::{
+    AlbumID3,
     ArtistID3,
     CowStr,
     Id,
     IdType,
+    Inherit,
     ItemGenre,
     Mergeable,
     SubsonicEntity,
@@ -178,6 +180,41 @@ pub struct Movement<'a> {
     pub name: CowStr<'a>,
     pub number: Option<u32>,
     pub count: Option<u32>,
+}
+
+impl<'a> Inherit for Song<'a> {
+    type From = AlbumID3<'a>;
+
+    fn inherit(&mut self, album: &AlbumID3<'a>) {
+        if self.album.is_none() {
+            self.album = Some(album.name.clone());
+        }
+        if self.album_id.is_none() {
+            self.album_id = Some(album.id.clone());
+        }
+        if self.parent.is_none() {
+            self.parent = self.album_id.clone();
+        }
+        if self.cover_art.is_none() {
+            self.cover_art = album.cover_art.clone();
+        }
+        if self.year.is_none() {
+            self.year = album.year;
+        }
+        if self.genre.is_none() {
+            self.genre = album.genre.clone();
+        }
+        if self.genres.is_none() {
+            self.genres = album.genres.clone();
+        }
+        if self.album_artists.is_none() {
+            self.album_artists = album.artists.clone();
+        }
+        if self.display_album_artist.is_none() {
+            self.display_album_artist =
+                album.display_artist.clone().or_else(|| album.artist.clone());
+        }
+    }
 }
 
 impl<'a> TagOrigin for Contributor<'a> {
