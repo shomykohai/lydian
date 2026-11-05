@@ -242,7 +242,7 @@ impl<'a> Service<MigrationRequest<'a>> for MigrationService {
                 .disk
                 .move_file_by_prefix(old_path, &path)
                 .await
-                .map_err(&migration_failed)?;
+                .map_err(migration_failed)?;
 
             sqlx::query(
                 r#"
