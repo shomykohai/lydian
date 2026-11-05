@@ -829,7 +829,9 @@ pub struct TidalProvider {
     quality: Option<TidalQuality>,
     download_quality: TidalQuality,
     token: RwLock<Option<CachedToken>>,
+    stream_token: RwLock<Option<CachedToken>>,
     mint: Mutex<()>,
+    stream_mint: Mutex<()>,
     sources: Cache<(String, TidalQuality), Arc<TrackSource>>,
 }
 
@@ -890,7 +892,9 @@ impl TidalProvider {
             quality,
             download_quality: TidalQuality::resolve(download_quality, quality),
             token: RwLock::new(None),
+            stream_token: RwLock::new(None),
             mint: Mutex::new(()),
+            stream_mint: Mutex::new(()),
             sources: Cache::builder()
                 .time_to_live(Self::SOURCE_CACHE_TTL)
                 .max_capacity(Self::SOURCE_CACHE_CAPACITY)
@@ -935,6 +939,54 @@ impl TidalProvider {
         *self.token.write().await = Some(token);
 
         Ok(value)
+    }
+
+    async fn cached_stream_token(&self) -> Option<Arc<str>> {
+        self.stream_token.read().await.as_ref().filter(|t| t.valid()).map(|t| t.value.clone())
+    }
+
+    async fn stream_token(&self) -> Option<Arc<str>> {
+        if let Some(value) = self.cached_stream_token().await {
+            return Some(value);
+        }
+
+        let _guard = self.stream_mint.lock().await;
+
+        if let Some(value) = self.cached_stream_token().await {
+            return Some(value);
+        }
+
+        let resp = self
+            .client
+            .get(format!("{}/token", self.stream_api))
+            .timeout(Self::MANIFEST_TIMEOUT)
+            .send()
+            .await;
+
+        let grant = match resp {
+            Ok(resp) if resp.status().is_success() => resp.json::<TidalToken>().await.ok()?,
+            Ok(resp) => {
+                debug!(
+                    "Stream token request on [{}] returned status code: {}",
+                    self.name,
+                    resp.status()
+                );
+                return None;
+            }
+            Err(err) => {
+                debug!("Stream token request on [{}] failed: {err}", self.name);
+                return None;
+            }
+        };
+
+        let token = CachedToken::new(&grant.access_token, grant.expires_in);
+        let value = token.value.clone();
+
+        debug!("Got a new stream token for [{}], valid for {}s", self.name, grant.expires_in);
+
+        *self.stream_token.write().await = Some(token);
+
+        Some(value)
     }
 
     async fn get<T: DeserializeOwned>(&self, path: &str, query: &[(&str, String)]) -> Result<T> {
@@ -1097,14 +1149,32 @@ impl TidalProvider {
         TidalQuality::resolve(format.unwrap_or_default(), self.quality)
     }
 
-    async fn fetch_manifest(&self, track_id: &str, quality: TidalQuality) -> Result<DashManifest> {
-        let resp = self
+    async fn manifest_request(
+        &self,
+        track_id: &str,
+        quality: TidalQuality,
+        token: Option<Arc<str>>,
+    ) -> Result<Response> {
+        let mut req = self
             .client
             .get(format!("{}/manifests", self.stream_api))
             .timeout(Self::MANIFEST_TIMEOUT)
-            .query(&[("id", track_id), ("quality", quality.as_str())])
-            .send()
-            .await?;
+            .query(&[("id", track_id), ("quality", quality.as_str())]);
+
+        if let Some(token) = token {
+            req = req.header(AUTHORIZATION, format!("Bearer {token}"));
+        }
+
+        Ok(req.send().await?)
+    }
+
+    async fn fetch_manifest(&self, track_id: &str, quality: TidalQuality) -> Result<DashManifest> {
+        let mut resp = self.manifest_request(track_id, quality, self.stream_token().await).await?;
+
+        if resp.status() == StatusCode::UNAUTHORIZED {
+            self.stream_token.write().await.take();
+            resp = self.manifest_request(track_id, quality, self.stream_token().await).await?;
+        }
 
         if !resp.status().is_success() {
             debug!(
